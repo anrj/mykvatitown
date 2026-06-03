@@ -45,6 +45,11 @@ keys_pressed     = {'up': False, 'down': False, 'left': False, 'right': False}
 _keys_lock       = threading.Lock()
 _keys_last_update = time.time()
 
+# smooth deceleration ramp
+_speed_mult = 1.0
+DECEL_RATE = 0.03
+ACCEL_RATE = 0.05
+
 _current_scene   = 'object_detection'
 
 
@@ -102,11 +107,13 @@ def manual_control_loop():
 def _should_stop(detections):
     if det_agent is None:
         return False, ''
-    return student_should_stop(detections, det_agent.img_size)
+    # pass lane boundary info so should_stop can ignore off-road obstacles
+    lane_info = lane_agent.last_debug_info if lane_agent else None
+    return student_should_stop(detections, det_agent.img_size, lane_info=lane_info)
 
 
 def visualize(frame_rgb):
-    global _stopped_by_det, _stop_reason
+    global _stopped_by_det, _stop_reason, _speed_mult
 
     bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
@@ -135,9 +142,11 @@ def visualize(frame_rgb):
         _stop_reason    = reason
 
         if running and not should_stop_flag and not wheels.is_game_over():
-            wheels.set_wheels_speed(pwm_left, pwm_right)
+            _speed_mult = min(1.0, _speed_mult + ACCEL_RATE)
+            wheels.set_wheels_speed(pwm_left * _speed_mult, pwm_right * _speed_mult)
         else:
-            wheels.set_wheels_speed(0.0, 0.0)
+            _speed_mult = max(0.0, _speed_mult - DECEL_RATE)
+            wheels.set_wheels_speed(pwm_left * _speed_mult, pwm_right * _speed_mult)
 
     if det_agent is not None and det_agent.model_loaded and detections:
         oh, ow = bgr.shape[:2]

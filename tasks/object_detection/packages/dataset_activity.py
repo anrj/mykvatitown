@@ -10,4 +10,31 @@ IMAGE_SIZE = 416
 
 
 def convert_labelme_json(json_path: str, img_w: int, img_h: int) -> List[str]:
-    raise NotImplementedError("Implement convert_labelme_json in dataset_activity.py")
+    with open(json_path) as f:
+        data = json.load(f)
+
+    lines = []
+    for shape in data["shapes"]:
+        label = shape["label"]
+        if label not in CLASSES:
+            continue
+
+        cls_id = CLASSES.index(label)
+        (x1, y1), (x2, y2) = shape["points"]
+
+        xmin, xmax = min(x1, x2), max(x1, x2)
+        ymin, ymax = min(y1, y2), max(y1, y2)
+
+        xmin = xmin * IMAGE_SIZE / img_w
+        xmax = xmax * IMAGE_SIZE / img_w
+        ymin = ymin * IMAGE_SIZE / img_h
+        ymax = ymax * IMAGE_SIZE / img_h
+
+        cx = (xmin + xmax) / 2 / IMAGE_SIZE
+        cy = (ymin + ymax) / 2 / IMAGE_SIZE
+        w  = (xmax - xmin) / IMAGE_SIZE
+        h  = (ymax - ymin) / IMAGE_SIZE
+
+        lines.append(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+
+    return lines

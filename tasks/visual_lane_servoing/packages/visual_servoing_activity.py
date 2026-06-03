@@ -18,10 +18,12 @@ _white_lower = np.array([_h.get('white_lower_h', 0),   _h.get('white_lower_s', 0
 _white_upper = np.array([_h.get('white_upper_h', 0), _h.get('white_upper_s', 0), _h.get('white_upper_v', 0)])
 
 def detect_lane_markings(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    raise NotImplementedError("TODO: Implement this function")
-
-
-
+    hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    
+    yellow_mask = cv2.inRange(hsv_image, _yellow_lower, _yellow_upper)
+    white_mask = cv2.inRange(hsv_image, _white_lower, _white_upper)
+    
+    return yellow_mask, white_mask
 
 def set_hsv_bounds(yellow_lower, yellow_upper, white_lower, white_upper):
     global _yellow_lower, _yellow_upper, _white_lower, _white_upper

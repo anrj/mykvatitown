@@ -4,8 +4,18 @@ import numpy as np
 
 def detect_curve(yellow_xs: List[int],white_xs:  List[int],curve_threshold: int = 350,
     ) -> Tuple[bool, int]:
-    # Hint: xs[0] is the position closest to the robot, xs[-1] is farther ahead.
-    # If the line shifts by more than curve_threshold pixels between near and far,
-    # the road is curving. The sign of the shift tells you which way.
-        return False, 0
-        #ToDo (optional) may help with high speed 
+    def get_shift(xs: List[int]) -> int:
+        valid_xs = [x for x in xs if x >= 0]
+        if len(valid_xs) >= 2:
+            return valid_xs[-1] - valid_xs[0]
+        return 0
+
+    shift_yellow = get_shift(yellow_xs)
+    shift_white = get_shift(white_xs)
+    
+    max_shift = shift_yellow if abs(shift_yellow) > abs(shift_white) else shift_white
+    
+    if abs(max_shift) > curve_threshold:
+        return True, int(np.sign(max_shift))
+        
+    return False, 0
