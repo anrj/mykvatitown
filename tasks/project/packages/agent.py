@@ -39,8 +39,8 @@ _DEFAULTS = {
         'blob_min_area': 6.0,
     },
     'control': {
-        'max_speed': 0.45, 'slow_speed': 0.20, 'back_speed': 0.12,
-        'chase_speed': 0.30, 'steer_kp': 0.55, 'steer_kd': 0.30,
+        'max_speed': 0.45, 'chase_speed': 0.30,
+        'steer_kp': 0.55, 'steer_kd': 0.30,
         'dist_kp': 2.0, 'accel_rate': 0.05, 'decel_rate': 0.08,
         'search_turn': 0.10, 'search_after_frames': 24, 'loop_hz': 20,
     },
@@ -52,24 +52,30 @@ _DEFAULTS = {
 }
 
 
+# Set by the server before calling main() to select which config file to load.
+# virtual_server sets this to 'project_config_sim.yaml'; real_server leaves it as-is.
+CONFIG_FILE = 'project_config.yaml'
+
+
 def _config_path():
     here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(here, '..', '..', '..', 'config', 'project_config.yaml')
+    return os.path.join(here, '..', '..', '..', 'config', CONFIG_FILE)
 
 
 def load_config():
     cfg = {k: dict(v) for k, v in _DEFAULTS.items()}
+    path = _config_path()
     try:
-        with open(_config_path(), 'r') as f:
+        with open(path, 'r') as f:
             loaded = yaml.safe_load(f) or {}
         for section, values in loaded.items():
             if isinstance(values, dict):
                 cfg.setdefault(section, {}).update(values)
             else:
                 cfg[section] = values
-        print('[agent] Loaded config from project_config.yaml')
+        print(f'[agent] Loaded config from {CONFIG_FILE}')
     except FileNotFoundError:
-        print('[agent] project_config.yaml not found, using defaults')
+        print(f'[agent] {CONFIG_FILE} not found, using defaults')
     return cfg
 
 
@@ -194,8 +200,6 @@ class Controller:
     def __init__(self, cfg):
         c = cfg['control']
         self.max_speed = float(c['max_speed'])
-        self.slow_speed = float(c['slow_speed'])
-        self.back_speed = float(c['back_speed'])      # gentle reverse when too close
         self.chase_speed = float(c['chase_speed'])    # forward creep while reacquiring far leader
         self.steer_kp = float(c['steer_kp'])
         self.steer_kd = float(c['steer_kd'])
@@ -248,8 +252,6 @@ def _sync_cfg():
         return
     c = CFG['control']
     _ctrl.max_speed = float(c['max_speed'])
-    _ctrl.slow_speed = float(c['slow_speed'])
-    _ctrl.back_speed = float(c['back_speed'])
     _ctrl.chase_speed = float(c['chase_speed'])
     _ctrl.steer_kp = float(c['steer_kp'])
     _ctrl.steer_kd = float(c['steer_kd'])
@@ -346,10 +348,7 @@ def main(camera, wheels, leds, stop_event):
             found, lateral_error, span, centers = _leader.detect(frame)
             sign, tag_px = _signs.detect(frame)
 
-            # --- decide the speed cap from signs ---
             speed_cap = _ctrl.max_speed
-            if sign == 'slow':
-                speed_cap = min(speed_cap, _ctrl.slow_speed)
 
             # A fresh, close stop sign starts a hold (debounced: only when
             # the tag grew, i.e. we just arrived, not while leaving).
@@ -373,8 +372,6 @@ def main(camera, wheels, leds, stop_event):
                 target_v = _ctrl.distance_speed(span, speed_cap)
                 if span >= _ctrl.stop_span:
                     state = 'HOLD'           # too close -> hold position
-                elif sign == 'slow':
-                    state = 'SLOW'
                 else:
                     state = 'FOLLOW'
             else:

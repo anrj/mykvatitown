@@ -46,7 +46,9 @@ from servers.common import make_frame_generator, shutdown_cleanup, suppress_http
 
 import tasks.project.packages.agent as agent
 
-CONFIG_PATH = os.path.join(project_root, 'config', 'project_config.yaml')
+_SIM_CONFIG_FILE = 'project_config_sim.yaml'
+agent.CONFIG_FILE = _SIM_CONFIG_FILE          # must be set before agent.main() is called
+CONFIG_PATH = os.path.join(project_root, 'config', _SIM_CONFIG_FILE)
 
 # Slider schema: (section, key, label, min, max, step)
 _CONFIG_SLIDERS = [
@@ -54,8 +56,6 @@ _CONFIG_SLIDERS = [
     ('leader',  'stop_span',     'Stop Span',        0.10, 0.90, 0.01),
     ('leader',  'span_deadband', 'Span Deadband',    0.00, 0.10, 0.005),
     ('control', 'max_speed',     'Max Speed',        0.00, 1.00, 0.01),
-    ('control', 'slow_speed',    'Slow Speed',       0.00, 0.50, 0.01),
-    ('control', 'back_speed',    'Back Speed',       0.00, 0.40, 0.01),
     ('control', 'chase_speed',   'Chase Speed',      0.00, 0.60, 0.01),
     ('control', 'steer_kp',      'Steer Kp',         0.00, 2.00, 0.01),
     ('control', 'steer_kd',      'Steer Kd',         0.00, 1.00, 0.01),
@@ -149,7 +149,8 @@ def _visualize(frame):
 
 
 # GodotCameraDriver.read() returns BGR, so rgb=False (no conversion).
-generate_frames = make_frame_generator(lambda: camera, _visualize, quality=70, rgb=False)
+generate_frames     = make_frame_generator(lambda: camera, _visualize,                    quality=70, rgb=False)
+generate_raw_frames = make_frame_generator(lambda: camera, lambda f: f or np.zeros((480,640,3),dtype=np.uint8), quality=70, rgb=False)
 
 
 @app.route('/')
@@ -160,6 +161,12 @@ def index():
 @app.route('/video')
 def video():
     return Response(generate_frames(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route('/raw')
+def raw_video():
+    return Response(generate_raw_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
@@ -349,7 +356,11 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying â€
   <span class="sub">Leader Following Â· PID Tuning</span>
 </div>
 <div class="main">
-  <div class="video-wrap"><img src="/video"></div>
+  <div class="video-wrap">
+    <img id="feed" src="/video">
+    <button id="rawBtn" onclick="toggleRaw()" style="position:absolute;top:8px;right:8px;
+      padding:4px 10px;font-size:11px;opacity:.75">Raw</button>
+  </div>
   <div class="sidebar" id="sidebar">
     <!-- status -->
     <div class="card">
@@ -394,6 +405,8 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying â€
 <script>
 const SLIDERS={_SLIDERS_JSON};
 let keys={{up:false,down:false,left:false,right:false}};
+let _rawMode=false;
+function toggleRaw(){{_rawMode=!_rawMode;document.getElementById('feed').src=_rawMode?'/raw':'/video';document.getElementById('rawBtn').className=_rawMode?'on':'';}}
 function post(u,b){{return fetch(u,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(b||{{}})}});}}
 function sendKeys(){{post('/keys',keys);}}
 function press(k,on){{keys[k]=!!on;sendKeys();}}
