@@ -1,0 +1,38 @@
+# Convoying project tunables — loaded by tasks/project/packages/agent.py.
+# The live dashboard may rewrite this file (sorted, no comments) when you
+# drag sliders; that's expected.
+
+leader:
+  grid_cols: 7
+  grid_rows: 3
+  dot_spacing_m: 0.0125
+  blob_min_area: 6.0        # smaller => detects the dot grid from farther away
+  target_span: 0.15         # leader width in frame at the desired follow distance
+  stop_span: 0.30           # leader this wide => too close, ease backward
+  span_deadband: 0.03       # hold still when within this of target_span
+
+control:
+  max_speed: 0.45
+  slow_speed: 0.20          # forward cap while a SLOW sign is active
+  back_speed: 0.12          # gentle reverse when too close / camera clipped
+  chase_speed: 0.30         # forward creep while reacquiring a far leader
+  steer_kp: 0.55
+  steer_kd: 0.30
+  dist_kp: 2.0              # distance-hold gain
+  accel_rate: 0.05
+  decel_rate: 0.08
+  search_turn: 0.10         # gentle scan turn after a long loss
+  search_after_frames: 24   # frames lost before scanning (~1.2 s @ 20 Hz)
+  loop_hz: 20
+
+signs:
+  enabled: true
+  min_tag_px: 38            # ignore AprilTags smaller than this (too far)
+  stop_hold_s: 2.0          # how long to sit at a STOP sign
+  tag_meanings:             # AprilTag id -> meaning
+    0: stop
+    1: slow
+
+camera:                      # optional; only for solvePnP metric distance on real hw
+  matrix: null
+  dist_coeffs: null

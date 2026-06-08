@@ -175,6 +175,12 @@ func _process(_delta: float) -> void:
 				print("[WheelServer] Changing scene to: ", scene_path)
 				get_tree().change_scene_to_file.call_deferred(scene_path)
 
+		elif msg_type == "start_leader":
+			for node in get_tree().get_nodes_in_group("convoy_leader"):
+				if node.has_method("start"):
+					node.start()
+			print("[WheelServer] start_leader dispatched")
+
 		elif msg_type == "get_state":
 			# Send current game state to Python
 			_send_state()
