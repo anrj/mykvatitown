@@ -24,7 +24,8 @@ control:
   loop_hz: 20
 
 signs:
-  enabled: true
+  enabled: false           # follower follows the LEADER (stops when it stops);
+                           # it does not read AprilTags -> skips aruco each frame
   min_tag_px: 38
   stop_hold_s: 2.0
   tag_meanings:

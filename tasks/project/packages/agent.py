@@ -25,6 +25,10 @@ _leader = None
 _signs = None
 _ctrl = None
 
+# Pause flag — set True by real_server on start-up; the control loop
+# skips processing and holds wheels at zero while paused.
+PAUSED = True
+
 
 # =====================================================================
 # SECTION 1: CONFIG LOADING
@@ -45,7 +49,7 @@ _DEFAULTS = {
         'search_turn': 0.10, 'search_after_frames': 24, 'loop_hz': 20,
     },
     'signs': {
-        'enabled': True, 'min_tag_px': 38, 'stop_hold_s': 2.0,
+        'enabled': False, 'min_tag_px': 38, 'stop_hold_s': 2.0,
         'tag_meanings': {0: 'stop', 1: 'slow'},
     },
     'camera': {'matrix': None, 'dist_coeffs': None},
@@ -339,6 +343,20 @@ def main(camera, wheels, leds, stop_event):
     try:
         while not stop_event.is_set():
             _sync_cfg()
+            if PAUSED:
+                ok, frame = camera.read()
+                if ok and frame is not None:
+                    e_found, e_err, e_span, e_centers = _leader.detect(frame)
+                    e_sign, e_px = _signs.detect(frame)
+                    DEBUG_FRAME = _annotate(frame, 'PAUSED', e_span, e_err, e_centers, e_sign)
+                    STATUS = {
+                        'state': 'PAUSED', 'found': e_found, 'span': round(e_span, 3),
+                        'lateral_error': round(e_err, 3), 'speed': 0.0,
+                        'turn': 0.0, 'sign': e_sign or 'none',
+                    }
+                wheels.set_wheels_speed(0.0, 0.0)
+                stop_event.wait(dt)
+                continue
             ok, frame = camera.read()
             if not ok or frame is None:
                 stop_event.wait(0.02)

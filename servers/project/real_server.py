@@ -76,6 +76,42 @@ wheels     = None
 leds       = None
 stop_event = threading.Event()
 
+# --- single camera reader ---------------------------------------------------
+# The real CameraDriver.read() is a blocking GStreamer VideoCapture read and is
+# NOT safe for two concurrent readers. So ONE background thread owns the camera
+# and publishes the latest frame; the agent and the /video feed both read that
+# latest frame (non-consuming). The video then runs at full camera FPS no matter
+# how slow the agent's per-frame detection is. (Same idea the sim's
+# GodotCameraDriver already uses.)
+_latest_frame = None
+_latest_lock  = threading.Lock()
+
+
+def _camera_loop():
+    """Continuously pull frames from the real camera into _latest_frame."""
+    global _latest_frame
+    while not stop_event.is_set():
+        ok, frame = camera.read()
+        if ok and frame is not None:
+            with _latest_lock:
+                _latest_frame = frame
+        else:
+            time.sleep(0.005)
+
+
+class _FrameSource:
+    """Camera-like shim: read() returns a copy of the most recent frame."""
+    def read(self):
+        with _latest_lock:
+            f = _latest_frame
+        if f is None:
+            return False, None
+        return True, f.copy()
+
+
+_frame_source = _FrameSource()
+
+
 MANUAL_MODE = False
 _keys = {'up': False, 'down': False, 'left': False, 'right': False}
 _keys_lock  = threading.Lock()
@@ -98,7 +134,7 @@ class AgentWheels:
 def _manual_loop():
     global _keys_stamp
     while not stop_event.is_set():
-        if not MANUAL_MODE:
+        if not MANUAL_MODE or getattr(agent, 'PAUSED', True):
             time.sleep(0.05)
             continue
         if time.time() - _keys_stamp > 0.5:
@@ -121,20 +157,30 @@ def _manual_loop():
         time.sleep(0.05)
 
 
+_BLANK = np.zeros((480, 640, 3), dtype=np.uint8)
+
+
 def _visualize(frame):
-    debug = getattr(agent, 'DEBUG_FRAME', None)
-    if debug is not None:
-        return debug
+    """Always show the agent's annotated detection view (dots / lane / state),
+    so you can see exactly what the follower perceives. Falls back to the live
+    frame until the agent produces its first overlay.
+
+    This view updates at the agent's detection rate, which is INDEPENDENT of the
+    agent's control loop and frame supply â€” a slow video does not slow the bot
+    or cause it to lose the dot grid.
+    """
+    dbg = getattr(agent, 'DEBUG_FRAME', None)
+    if dbg is not None:
+        return dbg
     if frame is not None:
         return frame
-    blank = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.putText(blank, "Waiting for camera...", (160, 240),
+    img = _BLANK.copy()
+    cv2.putText(img, "Waiting for camera...", (160, 240),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (80, 80, 80), 2)
-    return blank
+    return img
 
 
-generate_frames     = make_frame_generator(lambda: camera, _visualize,                    quality=70, rgb=True)
-generate_raw_frames = make_frame_generator(lambda: camera, lambda f: f or np.zeros((480,640,3),dtype=np.uint8), quality=70, rgb=True)
+generate_frames = make_frame_generator(lambda: _frame_source, _visualize, quality=70, rgb=False)
 
 
 @app.route('/')
@@ -148,17 +194,26 @@ def video():
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
-@app.route('/raw')
-def raw_video():
-    return Response(generate_raw_frames(),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
-
-
 @app.route('/status')
 def status():
     st = dict(getattr(agent, 'STATUS', {}) or {})
     st['mode'] = 'manual' if MANUAL_MODE else 'auto'
+    st['paused'] = getattr(agent, 'PAUSED', True)
     return jsonify(st)
+
+
+@app.route('/start', methods=['POST'])
+def start():
+    agent.PAUSED = False
+    return jsonify({'paused': False})
+
+
+@app.route('/stop', methods=['POST'])
+def stop():
+    agent.PAUSED = True
+    if wheels:
+        wheels.set_wheels_speed(0.0, 0.0)
+    return jsonify({'paused': True})
 
 
 @app.route('/set_mode', methods=['POST'])
@@ -243,9 +298,11 @@ def main():
 
     print('\n[4/4] Starting agent...')
     stop_event.clear()
+    # One background reader owns the camera; agent + video read the latest frame.
+    threading.Thread(target=_camera_loop, daemon=True, name='CameraLoop').start()
     threading.Thread(
         target=agent.main,
-        args=(camera, AgentWheels(wheels), leds, stop_event),
+        args=(_frame_source, AgentWheels(wheels), leds, stop_event),
         daemon=True, name='AgentThread',
     ).start()
     threading.Thread(target=_manual_loop, daemon=True, name='ManualLoop').start()
@@ -336,8 +393,6 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying â€
 <div class="main">
   <div class="video-wrap">
     <img id="feed" src="/video">
-    <button id="rawBtn" onclick="toggleRaw()" style="position:absolute;top:8px;right:8px;
-      padding:4px 10px;font-size:11px;opacity:.75">Raw</button>
   </div>
   <div class="sidebar" id="sidebar">
     <div class="card">
@@ -356,6 +411,10 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying â€
         <button onmousedown="press('left',1)" onmouseup="press('left',0)" onmouseleave="press('left',0)">â—€</button>
         <button onmousedown="press('down',1)" onmouseup="press('down',0)" onmouseleave="press('down',0)">â–¼</button>
         <button onmousedown="press('right',1)" onmouseup="press('right',0)" onmouseleave="press('right',0)">â–¶</button>
+      </div>
+      <div class="mode-row" style="margin-top:8px">
+        <button id="startBtn" onclick="setPaused(false)" style="flex:1;background:#2ea043;border-color:#2ea043">Start</button>
+        <button id="stopBtn" onclick="setPaused(true)" style="flex:1">Stop</button>
       </div>
       <p style="color:var(--muted);font-size:11px;margin:6px 0 0">Arrow keys / WASD in manual mode.</p>
     </div>
@@ -376,14 +435,15 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying â€
 <script>
 const SLIDERS={_SLIDERS_JSON};
 let keys={{up:false,down:false,left:false,right:false}};
-let _rawMode=false;
-function toggleRaw(){{_rawMode=!_rawMode;document.getElementById('feed').src=_rawMode?'/raw':'/video';document.getElementById('rawBtn').className=_rawMode?'on':'';}}
 function post(u,b){{return fetch(u,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(b||{{}})}});}}
 function sendKeys(){{post('/keys',keys);}}
 function press(k,on){{keys[k]=!!on;sendKeys();}}
 function setMode(m){{post('/set_mode',{{mode:m}}).then(()=>{{
   document.getElementById('autoBtn').className=m==='auto'?'on':'';
   document.getElementById('manBtn').className=m==='manual'?'on':'';}});}}
+function setPaused(p){{post(p?'/stop':'/start',{{}}).then(()=>{{
+  document.getElementById('startBtn').className=p?'':'on';
+  document.getElementById('stopBtn').className=p?'on':'';}});}}
 const KMAP={{ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right',w:'up',s:'down',a:'left',d:'right'}};
 addEventListener('keydown',e=>{{if(KMAP[e.key]&&!keys[KMAP[e.key]]){{keys[KMAP[e.key]]=true;sendKeys();e.preventDefault();}}}});
 addEventListener('keyup',e=>{{if(KMAP[e.key]){{keys[KMAP[e.key]]=false;sendKeys();e.preventDefault();}}}});
@@ -460,7 +520,10 @@ buildSliders();loadConfig();initSliders();
 setInterval(()=>{{
   fetch('/status').then(r=>r.json()).then(d=>{{
     const dot=document.getElementById('dot');
-    dot.style.background=d.mode==='manual'?'var(--accent)':'#3fb950';
+    const paused=d.paused;
+    dot.style.background=paused?'#e74c3c':(d.mode==='manual'?'var(--accent)':'#2ecc71');
+    document.getElementById('startBtn').className=paused?'':'on';
+    document.getElementById('stopBtn').className=paused?'on':'';
     document.getElementById('status').innerHTML=Object.entries(d).map(
       ([k,v])=>'<div class="row"><span class="k">'+k+'</span><span class="v">'+JSON.stringify(v)+'</span></div>'
     ).join('');
