@@ -23,14 +23,6 @@ control:
   search_after_frames: 24
   loop_hz: 20
 
-signs:
-  enabled: true
-  min_tag_px: 38
-  stop_hold_s: 2.0
-  tag_meanings:
-    0: stop
-    1: slow
-
 camera:
   matrix: null
   dist_coeffs: null

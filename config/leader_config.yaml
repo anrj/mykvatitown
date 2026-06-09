@@ -1,0 +1,13 @@
+# Convoying leader — REAL HARDWARE.
+# Lane-follow tuning lives in config/lane_servoing_config.yaml.
+
+signs:
+  enabled: true
+  min_tag_px: 38
+  stop_hold_s: 1.0
+  tag_meanings:
+    0: stop
+    1: slow
+
+control:
+  loop_hz: 20

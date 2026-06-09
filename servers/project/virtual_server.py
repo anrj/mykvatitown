@@ -63,8 +63,6 @@ _CONFIG_SLIDERS = [
     ('control', 'accel_rate',    'Accel Rate',       0.00, 0.20, 0.01),
     ('control', 'decel_rate',    'Decel Rate',       0.00, 0.20, 0.01),
     ('control', 'search_turn',   'Search Turn',      0.00, 0.40, 0.01),
-    ('signs',   'min_tag_px',    'Min Tag Size (px)', 10,   100,   1),
-    ('signs',   'stop_hold_s',   'Stop Hold (s)',    0.50, 5.00, 0.10),
 ]
 
 
@@ -395,10 +393,6 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying â€
     <div class="card">
       <div class="card-h">Control Config</div>
       <div id="sliders-control"></div>
-    </div>
-    <div class="card">
-      <div class="card-h">Sign Config</div>
-      <div id="sliders-signs"></div>
     </div>
   </div>
 </div>

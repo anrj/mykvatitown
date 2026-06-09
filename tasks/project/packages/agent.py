@@ -4,11 +4,10 @@ Convoying follower — final project agent.
 One Duckiebot follows another. The leader carries the Duckietown circle
 grid (3 rows x 7 dots) on its back; we detect it with cv2.findCirclesGrid,
 steer to keep it centred, and modulate speed to hold a safe distance.
-Traffic signs are AprilTags (tag36h11) read with cv2.aruco.
+Sign detection is leader-only; this bot mimics the leader via the dot grid.
 """
 
 import os
-import time
 
 import cv2
 import numpy as np
@@ -22,7 +21,6 @@ STATUS = {}
 # Runtime config (mutable, read by the web UI for live tuning).
 CFG = None
 _leader = None
-_signs = None
 _ctrl = None
 
 
@@ -43,10 +41,6 @@ _DEFAULTS = {
         'steer_kp': 0.55, 'steer_kd': 0.30,
         'dist_kp': 2.0, 'accel_rate': 0.05, 'decel_rate': 0.08,
         'search_turn': 0.10, 'search_after_frames': 24, 'loop_hz': 20,
-    },
-    'signs': {
-        'enabled': True, 'min_tag_px': 38, 'stop_hold_s': 2.0,
-        'tag_meanings': {0: 'stop', 1: 'slow'},
     },
     'camera': {'matrix': None, 'dist_coeffs': None},
 }
@@ -142,53 +136,7 @@ class LeaderDetector:
 
 
 # =====================================================================
-# SECTION 3: SIGN DETECTION  (AprilTag tag36h11)  — Milestone 2
-#   Each Duckietown traffic sign carries a tag36h11 marker. We map its
-#   id -> meaning ('stop' / 'slow') and use the marker's pixel size as a
-#   proximity cue (bigger tag => we are closer to the sign).
-# =====================================================================
-
-class SignDetector:
-    def __init__(self, cfg):
-        self.enabled = bool(cfg['signs']['enabled'])
-        self.min_px = float(cfg['signs']['min_tag_px'])
-        # yaml may give string keys; normalise to int -> meaning
-        self.meanings = {int(k): str(v).lower()
-                         for k, v in cfg['signs']['tag_meanings'].items()}
-        self._detector = None
-        if self.enabled:
-            try:
-                d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
-                self._detector = cv2.aruco.ArucoDetector(d, cv2.aruco.DetectorParameters())
-            except Exception as e:
-                print(f'[agent] AprilTag detector unavailable ({e}); signs disabled')
-                self.enabled = False
-
-    def detect(self, bgr):
-        """Return (meaning_or_None, tag_px). Closest relevant tag wins."""
-        if not self.enabled or self._detector is None:
-            return None, 0.0
-        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = self._detector.detectMarkers(gray)
-        if ids is None:
-            return None, 0.0
-
-        best_meaning, best_px = None, 0.0
-        for c, i in zip(corners, ids.flatten()):
-            meaning = self.meanings.get(int(i))
-            if meaning is None:
-                continue
-            quad = c.reshape(-1, 2)
-            size_px = float(np.linalg.norm(quad[0] - quad[2]))  # diagonal
-            if size_px < self.min_px:
-                continue
-            if size_px > best_px:
-                best_meaning, best_px = meaning, size_px
-        return best_meaning, best_px
-
-
-# =====================================================================
-# SECTION 4: CONTROL  (PID steering + distance speed control + smooth ramp)
+# SECTION 3: CONTROL  (PID steering + distance speed control + smooth ramp)
 #   - steering : PID on lateral_error -> differential turn
 #   - speed    : PURE proportional on span error around target_span. At the
 #                target distance the speed is exactly 0 (it holds position);
@@ -266,7 +214,7 @@ def _sync_cfg():
 
 
 # =====================================================================
-# SECTION 5: LED SIGNALLING
+# SECTION 4: LED SIGNALLING
 #   Corner LEDs communicate the follower's state. Guarded with `if leds:`
 #   because the LED hardware may fail to initialise on a real bot.
 #   Indices: 0=front-left, 2=front-right, 3=back-left, 4=back-right.
@@ -274,8 +222,7 @@ def _sync_cfg():
 
 _COLORS = {
     'FOLLOW': [0.0, 1.0, 0.0],   # green
-    'SLOW':   [1.0, 0.7, 0.0],   # amber
-    'STOP':   [1.0, 0.0, 0.0],   # red
+    'HOLD':   [1.0, 0.7, 0.0],   # amber — holding distance / leader stopped
     'SEARCH': [0.0, 0.3, 1.0],   # blue
 }
 
@@ -287,7 +234,7 @@ def set_leds(leds, state, turn):
     leds.set_rgb(3, base)
     leds.set_rgb(4, base)
     # Front LEDs double as turn indicators while following.
-    if state in ('FOLLOW', 'SLOW') and abs(turn) > 0.12:
+    if state in ('FOLLOW', 'HOLD') and abs(turn) > 0.12:
         if turn > 0:                         # turning right
             leds.set_rgb(2, [1.0, 0.6, 0.0]); leds.set_rgb(0, base)
         else:                                # turning left
@@ -297,20 +244,17 @@ def set_leds(leds, state, turn):
 
 
 # =====================================================================
-# SECTION 6: STATE MACHINE + main()
-#   States: SEARCH (no leader) / FOLLOW / SLOW (slow sign) / STOP
-#   (leader too close, or holding at a stop sign). main() owns the loop.
+# SECTION 5: STATE MACHINE + main()
+#   States: SEARCH / FOLLOW / HOLD (leader too close or stopped).
 # =====================================================================
 
-def _annotate(bgr, state, span, lateral_error, centers, sign):
+def _annotate(bgr, state, span, lateral_error, centers):
     """Draw a small debug overlay (shown in the sim web UI)."""
     img = bgr.copy()
     if centers is not None:
         for (x, y) in centers.astype(int):
             cv2.circle(img, (x, y), 3, (0, 255, 0), -1)
     txt = f'{state}  span={span:.2f}  e={lateral_error:+.2f}'
-    if sign:
-        txt += f'  sign={sign}'
     cv2.putText(img, txt, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                 (0, 0, 0), 4)
     cv2.putText(img, txt, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
@@ -319,19 +263,15 @@ def _annotate(bgr, state, span, lateral_error, centers, sign):
 
 
 def main(camera, wheels, leds, stop_event):
-    global DEBUG_FRAME, STATUS, CFG, _leader, _signs, _ctrl
+    global DEBUG_FRAME, STATUS, CFG, _leader, _ctrl
 
     CFG = load_config()
     _leader = LeaderDetector(CFG)
-    _signs = SignDetector(CFG)
     _ctrl = Controller(CFG)
 
-    stop_hold_s = float(CFG['signs']['stop_hold_s'])
     dt = 1.0 / float(CFG['control']['loop_hz'])
 
     lost_count = 0
-    stop_until = 0.0            # wall-clock time to hold at a stop sign
-    last_stop_px = 0.0          # to detect arriving at vs leaving a stop sign
     last_e = 0.0               # last lateral error while the leader was seen
     last_span = 0.0            # last span while seen (tells us WHY we lost it)
     last_turn = 0.0            # last steering command while following
@@ -344,27 +284,13 @@ def main(camera, wheels, leds, stop_event):
                 stop_event.wait(0.02)
                 continue
 
-            now = time.time()
             found, lateral_error, span, centers = _leader.detect(frame)
-            sign, tag_px = _signs.detect(frame)
 
             speed_cap = _ctrl.max_speed
 
-            # A fresh, close stop sign starts a hold (debounced: only when
-            # the tag grew, i.e. we just arrived, not while leaving).
-            if sign == 'stop' and tag_px >= last_stop_px and now > stop_until + 0.5:
-                stop_until = now + stop_hold_s
-            last_stop_px = tag_px if sign == 'stop' else 0.0
-
-            holding_stop = now < stop_until
-
             # --- pick state + commands ---
             turn = 0.0
-            if holding_stop:
-                state = 'STOP'
-                _ctrl.reset_steer()
-                target_v = 0.0
-            elif found:
+            if found:
                 lost_count = 0
                 last_e, last_span = lateral_error, span
                 turn = _ctrl.steering(lateral_error)
@@ -402,11 +328,11 @@ def main(camera, wheels, leds, stop_event):
 
             # --- signal + publish debug ---
             set_leds(leds, state, turn)
-            DEBUG_FRAME = _annotate(frame, state, span, lateral_error, centers, sign)
+            DEBUG_FRAME = _annotate(frame, state, span, lateral_error, centers)
             STATUS = {
                 'state': state, 'found': found, 'span': round(span, 3),
                 'lateral_error': round(lateral_error, 3), 'speed': round(v, 3),
-                'turn': round(turn, 3), 'sign': sign or 'none',
+                'turn': round(turn, 3),
             }
 
             stop_event.wait(dt)
