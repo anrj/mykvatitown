@@ -1,13 +1,28 @@
 # Convoying leader — REAL HARDWARE.
-# Lane-follow tuning lives in config/lane_servoing_config.yaml.
 
 signs:
   enabled: true
-  min_tag_px: 38
+  min_tag_px: 45
+  slow_tag_px: 24
   stop_hold_s: 1.0
+  red_slow_area: 0.003
+  red_stop_area: 0.010
+  red_slow_bottom: 0.58
+  red_stop_bottom: 0.80
+  use_detection: true
   tag_meanings:
     0: stop
     1: slow
 
 control:
   loop_hz: 20
+  cruise_speed_mult: 1.0
+  slow_speed_mult: 0.35
+  depart_speed_mult: 0.45
+  depart_slow_s: 2.5
+  single_lane_cap: 0.55
+  recovery_cap: 0.20
+  accel_rate: 0.05
+  decel_rate: 0.07
+  detection_slow_threshold: 0.08
+  detection_stop_threshold: 0.18

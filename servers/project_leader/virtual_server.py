@@ -31,10 +31,11 @@ from launcher.ports import find_available_port
 from launcher.config import GODOT_SCENES
 from servers.common import make_frame_generator, shutdown_cleanup, suppress_http_logs
 
+import tasks.project_leader.packages.leader_agent as leader_agent
 import tasks.project_leader.packages.agent as agent
 
 _SIM_CONFIG_FILE = 'leader_config_sim.yaml'
-agent.CONFIG_FILE = _SIM_CONFIG_FILE
+leader_agent.CONFIG_FILE = _SIM_CONFIG_FILE
 CONFIG_PATH = os.path.join(project_root, 'config', _SIM_CONFIG_FILE)
 
 _CONFIG_SLIDERS = [
@@ -110,7 +111,7 @@ def _manual_loop():
 
 
 def _visualize(frame):
-    debug = getattr(agent, 'DEBUG_FRAME', None)
+    debug = getattr(leader_agent, 'DEBUG_FRAME', None)
     if debug is not None:
         return debug
     if frame is not None:
@@ -136,7 +137,7 @@ def video():
 
 @app.route('/status')
 def status():
-    st = dict(getattr(agent, 'STATUS', {}) or {})
+    st = dict(getattr(leader_agent, 'STATUS', {}) or {})
     st['mode'] = 'manual' if MANUAL_MODE else 'auto'
     return jsonify(st)
 
@@ -171,7 +172,7 @@ def reset():
 
 @app.route('/get_config')
 def get_config():
-    cfg = getattr(agent, 'CFG', None) or _load_config_file()
+    cfg = getattr(leader_agent, 'CFG', None) or _load_config_file()
     return jsonify(cfg)
 
 
@@ -182,8 +183,8 @@ def update_config():
         if isinstance(values, dict):
             if section == 'tag_meanings':
                 continue
-            if agent.CFG is not None:
-                agent.CFG.setdefault(section, {}).update(values)
+            if leader_agent.CFG is not None:
+                leader_agent.CFG.setdefault(section, {}).update(values)
     on_disk = _load_config_file()
     for section, values in data.items():
         if isinstance(values, dict):
@@ -230,7 +231,7 @@ def main():
     print('\n[4/4] Starting leader agent...')
     stop_event.clear()
     threading.Thread(
-        target=agent.main,
+        target=leader_agent.main,
         args=(camera, AgentWheels(wheels), leds, stop_event),
         daemon=True, name='LeaderAgentThread',
     ).start()

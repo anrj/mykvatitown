@@ -6,7 +6,7 @@
 [ext_resource type="PackedScene" path="res://scenes/tiles/tile_cross3.tscn" id="4_y7vrc"]
 [ext_resource type="PackedScene" uid="uid://b7ugvo11ae2ss" path="res://scenes/objects/DuckieRagdool.tscn" id="5_ekvqd"]
 [ext_resource type="PackedScene" uid="uid://mo3nfx0lk1h3" path="res://scenes/objects/obj_stop_sign.tscn" id="6_n1yv4"]
-[ext_resource type="Texture2D" uid="uid://b3wgvj5kwquk4" path="res://textures/tag36h11/tag36_11_00001.png" id="7_xv6rw"]
+[ext_resource type="Texture2D" path="res://textures/tag36h11/tag36_11_00000.png" id="7_xv6rw"]
 [ext_resource type="PackedScene" uid="uid://bm6eeklw3fh22" path="res://scenes/objects/obj_parking_sign.tscn" id="8_tw3f0"]
 [ext_resource type="PackedScene" uid="uid://by8pqr474iaqj" path="res://scenes/robot/duckie_bot.tscn" id="9_5xmy2"]
 [ext_resource type="Script" uid="uid://frrhxfeqwt4d" path="res://scripts/path_follow_3d.gd" id="11_ucdee"]
@@ -275,24 +275,31 @@ sign_texture = ExtResource("7_xv6rw")
 
 [node name="Sign_4_6" parent="Signs" unique_id=914577599 instance=ExtResource("6_n1yv4")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.4, 0.091, 3.6)
+sign_texture = ExtResource("7_xv6rw")
 
 [node name="Sign_10_9" parent="Signs" unique_id=50444080 instance=ExtResource("6_n1yv4")]
 transform = Transform3D(-4.371139e-08, 0, 1, 0, 1, 0, -1, 0, -4.371139e-08, 6, 0.091, 5.4)
+sign_texture = ExtResource("7_xv6rw")
 
 [node name="Sign_10_10" parent="Signs" unique_id=338324099 instance=ExtResource("6_n1yv4")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 0.091, 6)
+sign_texture = ExtResource("7_xv6rw")
 
 [node name="Sign_9_10" parent="Signs" unique_id=1921600219 instance=ExtResource("6_n1yv4")]
 transform = Transform3D(1.1924881e-08, 0, -1, 0, 1, 0, 1, 0, 1.1924881e-08, 5.4, 0.091, 6)
+sign_texture = ExtResource("7_xv6rw")
 
 [node name="Sign_9_9" parent="Signs" unique_id=1516801057 instance=ExtResource("6_n1yv4")]
 transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 5.4, 0.091, 5.4)
+sign_texture = ExtResource("7_xv6rw")
 
 [node name="Sign_11_5" parent="Signs" unique_id=843150894 instance=ExtResource("6_n1yv4")]
 transform = Transform3D(1.1924881e-08, 0, -1, 0, 1, 0, 1, 0, 1.1924881e-08, 6.6, 0.091, 3)
+sign_texture = ExtResource("7_xv6rw")
 
 [node name="Sign_11_4" parent="Signs" unique_id=1722985175 instance=ExtResource("6_n1yv4")]
 transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 6.6, 0.091, 2.4)
+sign_texture = ExtResource("7_xv6rw")
 
 [node name="Sign_1_10" parent="Signs" unique_id=882736530 instance=ExtResource("8_tw3f0")]
 transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 0.6, 0.091, 6)
