@@ -79,12 +79,22 @@ class LeadFSM:
         # the left steer law down (and optionally its forward speed up).
         self.left_widen       = float(cfg.get("left_widen", 0.7))
         self.left_base_factor = float(cfg.get("left_base_factor", 1.0))
+        self.right_steer_factor = float(cfg.get("right_steer_factor", 1.15))
+        self.right_base_factor  = float(cfg.get("right_base_factor", 1.05))
         self.cross_base  = float(cfg.get("cross_base_speed", 0.25))
         self.min_turn_s  = float(cfg.get("min_turn_s", 0.8))
         self.max_turn_s  = float(cfg.get("max_turn_s", 3.0))
         self.min_cross_s = float(cfg.get("min_cross_s", 0.4))
         self.max_cross_s = float(cfg.get("max_cross_s", 2.0))
-        self.turn_yaw_target = float(cfg.get("turn_yaw_target_rad", 1.40))  # ~80 deg
+        default_yaw = float(cfg.get("turn_yaw_target_rad", 1.40))
+        self.left_yaw_target  = float(cfg.get("left_yaw_target_rad", default_yaw))
+        self.right_yaw_target = float(cfg.get("right_yaw_target_rad", 1.35))  # ~77° arc
+        # Optional scale on physics-derived arc time (1.0 = no extra padding).
+        self.right_turn_s_factor = float(cfg.get("right_turn_s_factor", 1.0))
+        self.left_turn_s_factor  = float(cfg.get("left_turn_s_factor", 1.0))
+        self.turn_time_scale     = float(cfg.get("turn_time_scale", 1.05))
+        self.wheel_baseline_m    = float(cfg.get("wheel_baseline_m", 0.1))
+        self.min_wheel_forward   = float(cfg.get("min_wheel_forward", 0.06))
         self.slow_after_turn_s = float(cfg.get("slow_after_turn_s", 2.0))
         self.slow_after_factor = float(cfg.get("slow_after_factor", 0.6))
 
@@ -146,10 +156,12 @@ class LeadFSM:
                 return self._decide(STATE_DONE, 0.0, 0.0, RED)
             return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m)
 
-        # 3) slow-after-turn window (give the follower time to reacquire)
+        # 3) slow-after-turn window (give the follower time to reacquire).
+        # Hold heading — stale lane PID from the approach road steers back the
+        # way we came right after a right turn.
         if t < self._slow_after_until:
             return self._decide(STATE_SLOW_AFTER, self.cruise_speed * self.slow_after_factor,
-                                wm.lane.steering_suggestion, YELLOW)
+                                0.0, YELLOW)
 
         # 4) intersection event -> consume the next route step
         if self._intersection_fires(wm):
@@ -230,6 +242,34 @@ class LeadFSM:
         self._maneuver = step if step in _MANEUVER_STEPS else "straight"
         self._maneuver_start = t
 
+    def _turn_yaw_target(self, step: str) -> float:
+        return self.left_yaw_target if step == "left" else self.right_yaw_target
+
+    def _effective_steer(self, steer_cap: float, base: float) -> float:
+        """Match control.motors_from_decision clamp so arc timing fits the sim."""
+        return min(steer_cap, max(0.0, base - self.min_wheel_forward))
+
+    def _arc_duration_s(self, steer_cap: float, base: float, yaw_target: float,
+                        time_factor: float = 1.0) -> float:
+        # Godot: omega = (v_right - v_left) / baseline; arc law left=base-steer,
+        # right=base+steer => |omega| ≈ 2*steer/baseline.
+        eff = self._effective_steer(steer_cap, base)
+        omega = 2.0 * eff / max(self.wheel_baseline_m, 1e-3)
+        if omega < 0.05:
+            return self.max_turn_s
+        t = self.turn_time_scale * time_factor * yaw_target / omega
+        return clamp(t, 0.25, self.max_turn_s)
+
+    def _turn_params(self, step: str) -> Tuple[float, float, float]:
+        """Return (base, steer_cap, time_factor) for a turn step."""
+        if step == "left":
+            base = self.turn_base * self.left_base_factor
+            steer_cap = min(self.turn_steer * self.left_widen, base * 0.75)
+            return base, steer_cap, self.left_turn_s_factor
+        base = self.turn_base * self.right_base_factor
+        steer_cap = min(self.turn_steer * self.right_steer_factor, base * 0.75)
+        return base, steer_cap, self.right_turn_s_factor
+
     def _run_maneuver(self, wm: WorldModel, t: float,
                       turn_yaw_rad: Optional[float],
                       fwd_dist_m: Optional[float]) -> Decision:
@@ -238,50 +278,52 @@ class LeadFSM:
         is_turn = step in _TURN_STEPS
         min_s = self.min_turn_s if is_turn else self.min_cross_s
         max_s = self.max_turn_s if is_turn else self.max_cross_s
+        yaw_target = self._turn_yaw_target(step) if is_turn else 0.0
+        if is_turn:
+            turn_base, turn_steer_cap, turn_tf = self._turn_params(step)
+            timed_done_s = self._arc_duration_s(turn_steer_cap, turn_base,
+                                                yaw_target, turn_tf)
+        else:
+            timed_done_s = min_s
 
         # Closed-loop on encoder odometry when both scalars are available;
-        # otherwise fall back to the legacy timed / lane-reacquire behaviour.
+        # otherwise fall back to timed arc (never lane-reacquire mid-turn).
         have_odo = turn_yaw_rad is not None and fwd_dist_m is not None
 
         done = False
         if elapsed >= max_s:                                   # hard safety timeout
             done = True
         elif have_odo:
-            if is_turn and abs(turn_yaw_rad) >= (self.turn_yaw_target - self.turn_yaw_tol_rad):
+            if is_turn and abs(turn_yaw_rad) >= (yaw_target - self.turn_yaw_tol_rad):
                 done = True                                    # turned to target heading
             elif (not is_turn) and fwd_dist_m >= (self.cross_distance_m - self.cross_dist_tol_m):
                 done = True                                    # crossed the target distance
-        elif is_turn and turn_yaw_rad is not None and abs(turn_yaw_rad) >= self.turn_yaw_target:
+        elif is_turn and turn_yaw_rad is not None and abs(turn_yaw_rad) >= yaw_target:
             done = True                                        # encoder yaw target reached
-        elif elapsed >= min_s and wm.lane.healthy:
-            done = True                                        # lane reacquired -> self-correct
+        elif is_turn and elapsed >= timed_done_s:
+            done = True                                        # sim: fixed arc duration
+        elif (not is_turn) and elapsed >= min_s and wm.lane.healthy:
+            done = True
 
         if done:
             self._maneuver = None
             self._slow_after_until = t + self.slow_after_turn_s
             self.request_lane_reset = True  # agent clears stale lane PID on re-entry
             return self._decide(STATE_SLOW_AFTER, self.cruise_speed * self.slow_after_factor,
-                                wm.lane.steering_suggestion, YELLOW)
+                                0.0, YELLOW)
 
         if is_turn:
             # Lane convention: +steer turns LEFT, -steer turns RIGHT.
             sign = 1.0 if step == "left" else -1.0
-            # Left turns sweep a wider arc than rights at a grid intersection:
-            # scale the whole steer law (ceiling + floor) down for lefts so the
-            # radius opens out, and optionally raise the forward speed.
-            widen       = self.left_widen if step == "left" else 1.0
-            steer_cap   = self.turn_steer * widen
-            steer_floor = 0.10 * widen
-            base        = self.turn_base * (self.left_base_factor if step == "left" else 1.0)
-            if have_odo and self.turn_yaw_target > 0:
-                # Taper steer as the remaining yaw error shrinks, with a floor so
-                # the bot keeps rotating until it reaches the target heading.
-                yaw_err = self.turn_yaw_target - abs(turn_yaw_rad)
-                mag = clamp(steer_cap * self.turn_kp * yaw_err / self.turn_yaw_target,
+            base, steer_cap, _ = self._turn_params(step)
+            steer_floor = 0.08
+            if have_odo and yaw_target > 0:
+                yaw_err = yaw_target - abs(turn_yaw_rad)
+                mag = clamp(steer_cap * self.turn_kp * yaw_err / yaw_target,
                             steer_floor, steer_cap)
                 steer = sign * mag
             else:
-                steer = sign * steer_cap                       # legacy fixed arc
+                steer = sign * steer_cap                       # fixed forward arc
             name = STATE_TURN_L if step == "left" else STATE_TURN_R
             return self._decide(name, base, steer, WHITE)
 

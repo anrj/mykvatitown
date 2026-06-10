@@ -4,10 +4,12 @@ from tasks.project.project_leader.fsm import Decision
 
 
 def motors_from_decision(d: Decision) -> Tuple[float, float]:
-    # Clamp steering to the base speed so a turn arcs forward instead of
-    # collapsing into a single-wheel pivot; base==0 still yields a full stop.
+    # Clamp steering so both wheels keep moving forward — a single stopped
+    # wheel pivots in place and easily overshoots (~180°) on right turns.
     base = d.base_speed
-    steer = max(-base, min(base, d.steering))
+    min_wheel = 0.06
+    max_steer = max(0.0, base - min_wheel)
+    steer = max(-max_steer, min(max_steer, d.steering))
     left = base - steer
     right = base + steer
     return _clip01(left), _clip01(right)

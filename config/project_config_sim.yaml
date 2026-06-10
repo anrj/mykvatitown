@@ -7,7 +7,7 @@ control:
   decel_rate: 0.08
   dist_kp: 1.88
   loop_hz: 20
-  max_speed: 0.45
+  max_speed: 0.44
   search_after_frames: 24
   search_turn: 0.2
   steer_kd: 0.05
@@ -19,7 +19,7 @@ leader:
   grid_rows: 3
   span_deadband: 0.03
   stop_span: 0.3
-  target_span: 0.2
+  target_span: 0.26
 signs:
   enabled: true
   min_tag_px: 38

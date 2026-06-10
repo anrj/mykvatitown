@@ -1,5 +1,11 @@
 base_speed: 0.52
 curve_speed: 0.35
+curve_boost: 1.4
+curve_threshold: 350
+sharp_corner_threshold: 220
+slice_weights: [0.15, 0.30, 0.55]
+sharp_slice_weights: [0.05, 0.20, 0.75]
 d_gain: 0.8
 detection_threshold: 100
 p_gain: 0.45
+max_steer: 0.4
