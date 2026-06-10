@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 import threading
 import argparse
 import queue
@@ -148,6 +149,9 @@ def main():
         WheelPWMConfiguration(pwm_min=0), WheelPWMConfiguration(pwm_min=0),
         godot_host=args.godot_host, godot_port=args.wheel_port,
     )
+    # Same map as project, but drop the NPC leader ahead on the path.
+    time.sleep(0.3)
+    wheels.remove_objects('npcpath')
 
     print('\n[2/3] Initializing camera (Godot)...')
     camera = GodotCameraDriver(godot_config=GodotCameraConfig(host='0.0.0.0', port=args.frame_port))
