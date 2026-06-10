@@ -20,6 +20,7 @@ GODOT_SCENES = {
     'object_detection': 'res://scenes/maps/lane_detect.tscn',
     'project': 'res://scenes/maps/convoing.tscn',
     'convoying': 'res://scenes/maps/convoing.tscn',
+    'project_leader': 'res://scenes/maps/project.tscn',
 }
 
 DEFAULT_WEB_PORT = 5000
