@@ -16,6 +16,7 @@ is just a biased variant of the normal controller.
 
 import cv2
 import numpy as np
+import yaml
 
 from tasks.visual_lane_servoing.packages import visual_servoing_activity as student
 from tasks.visual_lane_servoing.packages.agent import (
@@ -39,6 +40,29 @@ def _norm_side(side) -> str:
 
 class LeaderLaneAgent(LaneServoingAgent):
     """LaneServoingAgent + convoy-leader stop-line helpers."""
+
+    def __init__(self, config_path: str = None):
+        super().__init__(config_path)
+        cfg = {}
+        if config_path:
+            try:
+                with open(config_path) as f:
+                    cfg = yaml.safe_load(f) or {}
+            except Exception:
+                cfg = {}
+        # Distance (px) from a single visible lane edge to the lane centre.
+        # Larger => the bot keeps MORE distance from whichever single line it
+        # is following. Raise this if it hugs the white/right line.
+        self._lane_half_width = float(cfg.get('lane_half_width_px', self._lane_half_width))
+        # Floor so the base class's adaptive update can't shrink the offset into
+        # line-hugging territory when the (dashed) yellow line is seen close/noisy.
+        self._min_half_width = float(cfg.get('min_lane_half_width_px', self._lane_half_width))
+
+    def _calculate_error(self, *args, **kwargs):
+        error = super()._calculate_error(*args, **kwargs)
+        if self._lane_half_width < self._min_half_width:
+            self._lane_half_width = self._min_half_width
+        return error
 
     def reset_steering_state(self) -> None:
         self._prev_error = 0.0

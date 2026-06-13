@@ -8,3 +8,11 @@ detection_threshold: 80
 curve_threshold: 350
 steering_threshold: 0.25
 curve_boost: 1.15
+
+# Single-edge follow geometry (px, for a 640-wide frame).
+# lane_half_width_px: distance from a lone visible edge to the lane centre.
+#   Increase if the bot HUGS the white/right line; decrease if it drifts toward yellow.
+# min_lane_half_width_px: floor that stops the adaptive estimate from shrinking
+#   too small (which is what makes the hugging get worse mid-run).
+lane_half_width_px: 200
+min_lane_half_width_px: 180

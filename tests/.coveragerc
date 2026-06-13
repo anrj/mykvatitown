@@ -1,0 +1,9 @@
+[run]
+branch = True
+source =
+    tasks/project/packages
+    tasks/project_leader/packages
+
+[report]
+show_missing = True
+skip_empty = True
