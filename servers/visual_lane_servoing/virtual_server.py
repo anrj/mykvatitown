@@ -1,6 +1,7 @@
 import sys
 import os
 import threading
+import time
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.join(script_dir, '..', '..')
@@ -20,6 +21,7 @@ from duckiebot.wheel_driver.wheels_driver_abs import WheelPWMConfiguration
 from duckiebot.camera_driver.godot_camera_driver import GodotCameraDriver, GodotCameraConfig
 from launcher.ports import find_available_port
 from servers.common import make_frame_generator, shutdown_cleanup, suppress_http_logs
+from servers.manual_control import ManualDriveController
 
 LANE_CONFIG_FILE = os.path.join(project_root, 'config', 'lane_servoing_config.yaml')
 LANE_HSV_CONFIG_FILE = os.path.join(project_root, 'config', 'lane_servoing_hsv_config.yaml')
@@ -37,6 +39,7 @@ wheels  = None
 agent   = None
 running = False
 stop_event = threading.Event()
+manual = ManualDriveController()
 
 
 def visualize(frame):
@@ -46,10 +49,11 @@ def visualize(frame):
         return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
     pwm_left, pwm_right = agent.compute_commands(frame)
-    if running:
-        wheels.set_wheels_speed(pwm_left, pwm_right)
-    else:
-        wheels.set_wheels_speed(0.0, 0.0)
+    if not manual.manual_mode:
+        if running:
+            wheels.set_wheels_speed(pwm_left, pwm_right)
+        else:
+            wheels.set_wheels_speed(0.0, 0.0)
     debug_info = agent.last_debug_info
 
     bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -128,9 +132,10 @@ def update_hsv():
 @app.route('/start', methods=['POST'])
 def start():
     global running
+    manual.set_mode('auto')
     running = True
-    print("[Control] Started")
-    return jsonify({'status': 'running'})
+    print("[Control] Started (auto)")
+    return jsonify({'status': 'running', 'mode': 'auto'})
 
 
 @app.route('/stop', methods=['POST'])
@@ -143,9 +148,29 @@ def stop():
     return jsonify({'status': 'stopped'})
 
 
+@app.route('/set_mode', methods=['POST'])
+def set_mode():
+    global running
+    mode = (request.json or {}).get('mode', 'auto')
+    out = manual.set_mode(mode)
+    if mode == 'manual':
+        running = False
+    if wheels:
+        wheels.set_wheels_speed(0.0, 0.0)
+    return jsonify({'mode': out})
+
+
+@app.route('/keys', methods=['POST'])
+def update_keys():
+    manual.update_keys(request.json or {})
+    return jsonify({'status': 'ok',
+                    'left': manual.last_left,
+                    'right': manual.last_right})
+
+
 @app.route('/running')
 def get_running():
-    return jsonify({'running': running})
+    return jsonify({'running': running, 'mode': 'manual' if manual.manual_mode else 'auto'})
 
 
 @app.route('/status')
@@ -194,6 +219,12 @@ def main():
     print("\n[3/3] Creating agent...")
     agent = LaneServoingAgent()
     print(f"  p_gain={agent.p_gain}, d_gain={agent.d_gain}, base_speed={agent.base_speed}")
+
+    threading.Thread(
+        target=manual.run_loop,
+        args=(stop_event, wheels.set_wheels_speed),
+        daemon=True, name='ManualLoop',
+    ).start()
 
     web_port = find_available_port(args.port)
     if web_port != args.port:

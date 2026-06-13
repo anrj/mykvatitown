@@ -1,28 +1,15 @@
 # Convoying leader — SIMULATION.
+# Lane edges: left (dashed) / right (solid) — same names as visual_lane_servoing.
 
-signs:
-  enabled: true
-  min_tag_px: 42          # AprilTag diagonal — only stop when tag is big (close)
-  slow_tag_px: 22         # start slowing when tag medium-sized
+lane_stop:
+  stop_trigger_line: left
+  at_line_follow_line: right
+  min_line_frames: 10
+  line_lost_frames: 4
+  bottom_line_px: 25
   stop_hold_s: 1.0
-  red_slow_area: 0.0025   # min sign bbox fraction of frame to slow
-  red_stop_area: 0.009    # min sign bbox fraction to stop (must be close)
-  red_slow_bottom: 0.58   # sign bottom must be below this line in frame
-  red_stop_bottom: 0.72   # stop only when sign is very low in frame (near)
-  use_detection: true
-  tag_meanings:
-    0: stop
-    1: slow
+  line_speed_mult: 0.35
 
 control:
   loop_hz: 20
-  cruise_speed_mult: 1.0
-  slow_speed_mult: 0.35
-  depart_speed_mult: 0.45
-  depart_slow_s: 2.5
-  single_lane_cap: 0.55
-  recovery_cap: 0.20
   accel_rate: 0.05
-  decel_rate: 0.07
-  detection_slow_threshold: 0.08
-  detection_stop_threshold: 0.18

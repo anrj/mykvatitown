@@ -35,8 +35,9 @@ import tasks.project_leader.packages.leader_agent as leader_agent
 CONFIG_PATH = os.path.join(project_root, 'config', leader_agent.CONFIG_FILE)
 
 _CONFIG_SLIDERS = [
-    ('signs', 'min_tag_px',  'Min Tag Size (px)', 10,  100, 1),
-    ('signs', 'stop_hold_s', 'Stop Hold (s)',     0.5, 5.0, 0.1),
+    ('lane_stop', 'stop_hold_s',        'Stop Hold (s)',       0.5, 3.0, 0.1),
+    ('lane_stop', 'line_speed_mult',    'White-Line Speed',    0.1, 0.6, 0.01),
+    ('lane_stop', 'line_lost_frames', 'Line Lost Frames', 2, 12, 1),
 ]
 
 
@@ -311,7 +312,7 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoy Leade
         <button id="manBtn" onclick="setMode('manual')">Manual</button>
       </div>
     </div>
-    <div class="card"><div class="card-h">Sign Config</div><div id="sliders-signs"></div></div>
+    <div class="card"><div class="card-h">Lane Stop Config</div><div id="sliders-signs"></div></div>
   </div>
 </div>
 <script>

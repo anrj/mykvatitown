@@ -1,10 +1,10 @@
-# Lane-follow tuning for the convoy leader (slower than default lane servoing).
-base_speed: 0.20
-curve_speed: 0.14
-p_gain: 0.40
-d_gain: 0.75
-max_steer: 0.30
-curve_boost: 1.15
-detection_threshold: 100
+# Leader lane follow — same tuning family as visual_lane_servoing, slightly slower.
+base_speed: 0.32
+curve_speed: 0.22
+p_gain: 0.45
+d_gain: 0.8
+max_steer: 0.38
+detection_threshold: 80
 curve_threshold: 350
-steering_threshold: 0.2
+steering_threshold: 0.25
+curve_boost: 1.15

@@ -30,17 +30,18 @@ from duckiebot.led_driver import VirtualLEDsDriver
 from launcher.ports import find_available_port
 from launcher.config import GODOT_SCENES
 from servers.common import make_frame_generator, shutdown_cleanup, suppress_http_logs
+from servers.manual_control import ManualDriveController, MANUAL_KEY_JS, MANUAL_PAD_HTML, MANUAL_PAD_CSS
 
 import tasks.project_leader.packages.leader_agent as leader_agent
-import tasks.project_leader.packages.agent as agent
 
 _SIM_CONFIG_FILE = 'leader_config_sim.yaml'
 leader_agent.CONFIG_FILE = _SIM_CONFIG_FILE
 CONFIG_PATH = os.path.join(project_root, 'config', _SIM_CONFIG_FILE)
 
 _CONFIG_SLIDERS = [
-    ('signs', 'min_tag_px',  'Min Tag Size (px)', 10,  100, 1),
-    ('signs', 'stop_hold_s', 'Stop Hold (s)',     0.5, 5.0, 0.1),
+    ('lane_stop', 'stop_hold_s',        'Stop Hold (s)',       0.5, 3.0, 0.1),
+    ('lane_stop', 'line_speed_mult',    'White-Line Speed',    0.1, 0.6, 0.01),
+    ('lane_stop', 'line_lost_frames', 'Line Lost Frames', 2, 12, 1),
 ]
 
 
@@ -65,11 +66,7 @@ camera     = None
 wheels     = None
 leds       = None
 stop_event = threading.Event()
-
-MANUAL_MODE = False
-_keys = {'up': False, 'down': False, 'left': False, 'right': False}
-_keys_lock = threading.Lock()
-_keys_stamp = 0.0
+manual = ManualDriveController()
 
 
 class AgentWheels:
@@ -77,37 +74,11 @@ class AgentWheels:
         self._inner = inner
 
     def set_wheels_speed(self, left, right):
-        if not MANUAL_MODE:
+        if not manual.manual_mode:
             self._inner.set_wheels_speed(left, right)
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
-
-
-def _manual_loop():
-    global _keys_stamp
-    while not stop_event.is_set():
-        if not MANUAL_MODE:
-            time.sleep(0.05)
-            continue
-        if time.time() - _keys_stamp > 0.5:
-            with _keys_lock:
-                for k in _keys:
-                    _keys[k] = False
-        with _keys_lock:
-            k = dict(_keys)
-
-        left = right = 0.0
-        if k['up']:
-            left = right = 0.5
-        elif k['down']:
-            left = right = -0.4
-        if k['left']:
-            left, right = left - 0.3, right + 0.3
-        elif k['right']:
-            left, right = left + 0.3, right - 0.3
-        wheels.set_wheels_speed(max(-1, min(1, left)), max(-1, min(1, right)))
-        time.sleep(0.05)
 
 
 def _visualize(frame):
@@ -138,28 +109,22 @@ def video():
 @app.route('/status')
 def status():
     st = dict(getattr(leader_agent, 'STATUS', {}) or {})
-    st['mode'] = 'manual' if MANUAL_MODE else 'auto'
+    st['mode'] = 'manual' if manual.manual_mode else 'auto'
     return jsonify(st)
 
 
 @app.route('/set_mode', methods=['POST'])
 def set_mode():
-    global MANUAL_MODE
     mode = (request.json or {}).get('mode', 'auto')
-    MANUAL_MODE = (mode == 'manual')
+    manual.set_mode(mode)
     if wheels:
         wheels.set_wheels_speed(0.0, 0.0)
-    return jsonify({'mode': 'manual' if MANUAL_MODE else 'auto'})
+    return jsonify({'mode': 'manual' if manual.manual_mode else 'auto'})
 
 
 @app.route('/keys', methods=['POST'])
 def keys():
-    global _keys_stamp
-    data = request.json or {}
-    with _keys_lock:
-        for k in _keys:
-            _keys[k] = bool(data.get(k, False))
-    _keys_stamp = time.time()
+    manual.update_keys(request.json or {})
     return jsonify({'status': 'ok'})
 
 
@@ -235,7 +200,11 @@ def main():
         args=(camera, AgentWheels(wheels), leds, stop_event),
         daemon=True, name='LeaderAgentThread',
     ).start()
-    threading.Thread(target=_manual_loop, daemon=True, name='ManualLoop').start()
+    threading.Thread(
+        target=manual.run_loop,
+        args=(stop_event, wheels.set_wheels_speed),
+        daemon=True, name='ManualLoop',
+    ).start()
     print('  leader_agent.main() running')
 
     def _shutdown(signum, frame):
@@ -281,6 +250,7 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoy Leade
  button.on{{background:var(--accent);border-color:var(--accent)}}
  button.danger{{background:var(--danger)}}
  .mode-row{{display:flex;gap:6px}} .mode-row button{{flex:1}}
+{MANUAL_PAD_CSS}
  .sg{{margin-bottom:12px}} .sl{{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:2px}}
  .sc{{display:flex;gap:6px;align-items:center}}
  .s{{flex:1;height:4px;background:#0d1117;appearance:none;border-radius:2px}}
@@ -303,8 +273,9 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoy Leade
         <button id="manBtn" onclick="setMode('manual')">Manual</button>
       </div>
       <button class="danger" style="width:100%;margin-top:8px" onclick="post('/reset',{{}})">↺ Reset</button>
+      {MANUAL_PAD_HTML}
     </div>
-    <div class="card"><div class="card-h">Sign Config</div><div id="sliders-signs"></div></div>
+    <div class="card"><div class="card-h">Lane Stop Config</div><div id="sliders-lane_stop"></div></div>
   </div>
 </div>
 <script>
@@ -313,8 +284,9 @@ function post(u,b){{return fetch(u,{{method:'POST',headers:{{'Content-Type':'app
 function setMode(m){{post('/set_mode',{{mode:m}}).then(()=>{{
   document.getElementById('autoBtn').className=m==='auto'?'on':'';
   document.getElementById('manBtn').className=m==='manual'?'on':'';}});}}
+{MANUAL_KEY_JS}
 function buildSliders(){{
-  document.getElementById('sliders-signs').innerHTML=SLIDERS.map(s=>{{
+  document.getElementById('sliders-lane_stop').innerHTML=SLIDERS.map(s=>{{
     const k=s[1],label=s[2],min=s[3],max=s[4],step=s[5];
     return '<div class="sg"><div class="sl"><span>'+label+'</span><span id="dv-'+k+'">—</span></div>'+
       '<div class="sc"><input type="range" class="s" id="sl-'+k+'" min="'+min+'" max="'+max+'" step="'+step+'">'+
@@ -325,7 +297,7 @@ function loadConfig(){{
   fetch('/get_config').then(r=>r.json()).then(cfg=>{{
     SLIDERS.forEach(s=>{{
       const k=s[1],v=(((cfg[s[0]]||{{}})[k])!==undefined?cfg[s[0]][k]:s[3]);
-      const sl=document.getElementById('sl-'+k'),inp=document.getElementById('in-'+k),dv=document.getElementById('dv-'+k);
+      const sl=document.getElementById('sl-'+k),inp=document.getElementById('in-'+k),dv=document.getElementById('dv-'+k);
       if(sl){{sl.value=v;if(dv)dv.textContent=parseFloat(v).toFixed(2)}}
       if(inp)inp.value=v;
     }});

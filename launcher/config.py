@@ -19,6 +19,7 @@ GODOT_SCENES = {
     'navigator': 'res://scenes/maps/map_follower.tscn',
     'object_detection': 'res://scenes/maps/lane_detect.tscn',
     'project': 'res://scenes/maps/convoing.tscn',
+    # lane_follower = reliable lane lines; use project.tscn when testing open-map signs
     'project_leader': 'res://scenes/maps/project.tscn',
     'convoying': 'res://scenes/maps/convoing.tscn',
 }

@@ -16,6 +16,27 @@ _EXTRA_CSS = '''
 .control-group:last-child { margin-bottom: 0; }
 .control-group label { display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600; }
 .control-row { display: flex; align-items: center; gap: 12px; }
+.mode-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.mode-row button { flex: 1; padding: 8px; border: 1px solid var(--border-color); border-radius: 6px;
+    background: var(--bg-sidebar); color: var(--text-secondary); cursor: pointer; font-family: inherit; }
+.mode-row button.on { background: var(--accent-blue); color: #fff; border-color: var(--accent-blue); }
+.key-display {
+    display: grid;
+    grid-template-areas: ". up ." "left down right";
+    grid-template-columns: repeat(3, 44px);
+    grid-template-rows: repeat(2, 44px);
+    gap: 4px;
+    justify-content: center;
+    margin: 8px 0;
+}
+.key-box {
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg-darker); border: 2px solid var(--border-color);
+    border-radius: 8px; font-size: 18px; color: var(--text-muted);
+}
+.key-box.active { background: rgba(46,204,113,0.2); border-color: #2ecc71; color: #2ecc71; }
+.key-up { grid-area: up; } .key-down { grid-area: down; }
+.key-left { grid-area: left; } .key-right { grid-area: right; }
 .value-display { min-width: 60px; text-align: right; font-family: monospace; font-size: 13px; color: var(--text-secondary); }
 .hsv-section-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin: 12px 0 8px; text-transform: uppercase; letter-spacing: 0.5px; }
 .hsv-section-title.yellow { color: #f1c40f; }
@@ -127,6 +148,24 @@ _CONTENT = '''
                 <div id="hsv-status" class="status"></div>
             </div>
 
+            <!-- Manual / Auto drive -->
+            <div class="card">
+                <div class="card-header">Drive Mode</div>
+                <div class="mode-row">
+                    <button id="btn-auto" class="on" onclick="setDriveMode('auto')">Auto Lane Follow</button>
+                    <button id="btn-manual" onclick="setDriveMode('manual')">Manual Drive</button>
+                </div>
+                <div class="key-display">
+                    <div class="key-box key-up" id="key-up">&#9650;</div>
+                    <div class="key-box key-left" id="key-left">&#9664;</div>
+                    <div class="key-box key-down" id="key-down">&#9660;</div>
+                    <div class="key-box key-right" id="key-right">&#9654;</div>
+                </div>
+                <p style="text-align:center;font-size:11px;color:var(--text-muted);margin-top:6px">
+                    Manual: arrow keys or WASD (same as introduction task)
+                </p>
+            </div>
+
             <!-- Drive Control card -->
             <div class="card">
                 <div class="card-header">Drive Control</div>
@@ -178,6 +217,42 @@ _CONTENT = '''
 '''
 
 _JS = '''
+    const keyState = {up: false, down: false, left: false, right: false};
+    const keyMap = {
+        'ArrowUp': 'up', 'ArrowDown': 'down', 'ArrowLeft': 'left', 'ArrowRight': 'right',
+        'w': 'up', 's': 'down', 'a': 'left', 'd': 'right',
+        'W': 'up', 'S': 'down', 'A': 'left', 'D': 'right',
+    };
+
+    function updateKeyDisplay() {
+        for (const [key, active] of Object.entries(keyState)) {
+            const el = document.getElementById('key-' + key);
+            if (el) el.classList.toggle('active', active);
+        }
+    }
+
+    function sendKeys() {
+        fetch('/keys', {method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(keyState)}).catch(() => {});
+    }
+
+    function setDriveMode(mode) {
+        postJSON('/set_mode', {mode: mode}).then(d => {
+            document.getElementById('btn-auto').classList.toggle('on', d.mode === 'auto');
+            document.getElementById('btn-manual').classList.toggle('on', d.mode === 'manual');
+            if (d.mode === 'auto') setRunningUI(false);
+        });
+    }
+
+    document.addEventListener('keydown', e => {
+        const k = keyMap[e.key];
+        if (k && !keyState[k]) { keyState[k] = true; updateKeyDisplay(); sendKeys(); e.preventDefault(); }
+    });
+    document.addEventListener('keyup', e => {
+        const k = keyMap[e.key];
+        if (k) { keyState[k] = false; updateKeyDisplay(); sendKeys(); e.preventDefault(); }
+    });
+
     function setRunningUI(isRunning) {
         const indicator = document.getElementById('run-indicator');
         const label     = document.getElementById('run-label');
@@ -187,6 +262,7 @@ _JS = '''
     }
 
     function driveStart() {
+        setDriveMode('auto');
         postJSON('/start', {}).then(() => setRunningUI(true))
             .catch(() => showStatus('config-status', 'Start failed!', 'error'));
     }
@@ -197,7 +273,11 @@ _JS = '''
     }
 
     // Sync indicator with server state on page load
-    fetch('/running').then(r => r.json()).then(d => setRunningUI(d.running));
+    fetch('/running').then(r => r.json()).then(d => {
+        setRunningUI(d.running);
+        document.getElementById('btn-auto').classList.toggle('on', d.mode !== 'manual');
+        document.getElementById('btn-manual').classList.toggle('on', d.mode === 'manual');
+    });
 
     // Load HSV bounds from server on page load
     fetch('/get_hsv')
