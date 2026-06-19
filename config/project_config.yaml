@@ -7,15 +7,15 @@ leader:
   grid_rows: 3
   dot_spacing_m: 0.0125
   blob_min_area: 4.0        # real camera may need finer blob detection
-  target_span: 0.30         # tune: leader width in frame at desired follow distance
-  stop_span: 0.50           # tune: leader this wide => too close, hold still
+  target_span: 0.12         # tune: leader width in frame at desired follow distance
+  stop_span: 0.18           # tune: leader this wide => too close, hold still
   span_deadband: 0.03
 
 control:
   max_speed: 0.35           # conservative starting speed for real hardware
   chase_speed: 0.20
   steer_kp: 0.45
-  steer_kd: 0.25
+  steer_kd: 0.10
   dist_kp: 1.5
   accel_rate: 0.05
   decel_rate: 0.08

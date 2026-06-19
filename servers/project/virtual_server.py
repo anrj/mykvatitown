@@ -45,7 +45,6 @@ from launcher.config import GODOT_SCENES
 from servers.common import make_frame_generator, shutdown_cleanup, suppress_http_logs
 
 import tasks.project.packages.agent as agent
-import queue
 
 _SIM_CONFIG_FILE = 'project_config_sim.yaml'
 agent.CONFIG_FILE = _SIM_CONFIG_FILE          # must be set before agent.main() is called
@@ -89,22 +88,6 @@ camera     = None
 wheels     = None              # real GodotWheelsDriver (server owns it)
 leds       = None
 stop_event = threading.Event()
-
-# Frame queue: MJPEG generator pushes, agent thread consumes.
-# Only the MJPEG generator calls camera.read() â€” the agent never touches the camera directly.
-_frame_queue = queue.Queue(maxsize=2)
-
-
-class _QueueCamera:
-    """Duck-typed camera: agent calls read(), gets frames from the queue."""
-    def __init__(self, q):
-        self._q = q
-    def read(self):
-        try:
-            return True, self._q.get(timeout=0.05)
-        except queue.Empty:
-            return False, None
-
 
 MANUAL_MODE = False
 _keys = {'up': False, 'down': False, 'left': False, 'right': False}
@@ -153,17 +136,8 @@ def _manual_loop():
         time.sleep(0.05)
 
 
-def _push_to_agent(frame):
-    """Push a raw frame into the agent's queue (non-blocking, drops if full)."""
-    if frame is not None:
-        try:
-            _frame_queue.put_nowait(frame.copy())
-        except queue.Full:
-            pass
-
-
 def _visualize(frame):
-    _push_to_agent(frame)
+    """Always show the agent's annotated detection view (dots / state)."""
     debug = getattr(agent, 'DEBUG_FRAME', None)
     if debug is not None:
         return debug
@@ -175,17 +149,9 @@ def _visualize(frame):
     return blank
 
 
-_BLANK = np.zeros((480, 640, 3), dtype=np.uint8)
-
-
-def _raw_visualize(frame):
-    _push_to_agent(frame)
-    return frame if frame is not None else _BLANK
-
-
-# GodotCameraDriver.read() returns BGR, so rgb=False (no conversion).
-generate_frames     = make_frame_generator(lambda: camera, _visualize,              quality=70, rgb=False)
-generate_raw_frames = make_frame_generator(lambda: camera, _raw_visualize,          quality=70, rgb=False)
+# GodotCameraDriver.read() returns BGR (rgb=False) and is concurrent-safe, so the
+# agent and this feed both read it directly â€” no queue, no extra reader thread.
+generate_frames = make_frame_generator(lambda: camera, _visualize, quality=70, rgb=False)
 
 
 @app.route('/')
@@ -196,12 +162,6 @@ def index():
 @app.route('/video')
 def video():
     return Response(generate_frames(),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
-
-
-@app.route('/raw')
-def raw_video():
-    return Response(generate_raw_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
@@ -312,7 +272,7 @@ def main():
     stop_event.clear()
     threading.Thread(
         target=agent.main,
-        args=(_QueueCamera(_frame_queue), AgentWheels(wheels), leds, stop_event),
+        args=(camera, AgentWheels(wheels), leds, stop_event),
         daemon=True, name='AgentThread',
     ).start()
     threading.Thread(target=_manual_loop, daemon=True, name='ManualLoop').start()
@@ -393,8 +353,6 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying â€
 <div class="main">
   <div class="video-wrap">
     <img id="feed" src="/video">
-    <button id="rawBtn" onclick="toggleRaw()" style="position:absolute;top:8px;right:8px;
-      padding:4px 10px;font-size:11px;opacity:.75">Raw</button>
   </div>
   <div class="sidebar" id="sidebar">
     <!-- status -->
@@ -440,8 +398,6 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying â€
 <script>
 const SLIDERS={_SLIDERS_JSON};
 let keys={{up:false,down:false,left:false,right:false}};
-let _rawMode=false;
-function toggleRaw(){{_rawMode=!_rawMode;document.getElementById('feed').src=_rawMode?'/raw':'/video';document.getElementById('rawBtn').className=_rawMode?'on':'';}}
 function post(u,b){{return fetch(u,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(b||{{}})}});}}
 function sendKeys(){{post('/keys',keys);}}
 function press(k,on){{keys[k]=!!on;sendKeys();}}
