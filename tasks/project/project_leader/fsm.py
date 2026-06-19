@@ -172,9 +172,12 @@ class LeadFSM:
             self.last_step = step
             if self._sign_pending:
                 self._sign_pending = False
-                self._stop_until = t + self.stop_duration
-                self._pending_step = step  # maneuver begins after the 1s halt
-                return self._decide(STATE_STOP, 0.0, 0.0, RED)
+
+                # Permanent stop at red line
+                self._done = True
+                self._maneuver = None
+
+                return self._decide(STATE_DONE, 0.0, 0.0, RED)
             self._begin_step(step, t)
             if self._done:
                 return self._decide(STATE_DONE, 0.0, 0.0, RED)
