@@ -1,30 +1,48 @@
-camera:
-  dist_coeffs: null
-  matrix: null
-control:
-  accel_rate: 0.05
-  chase_speed: 0.3
-  decel_rate: 0.08
-  dist_kp: 2.0
-  loop_hz: 20
-  max_speed: 0.45
-  search_after_frames: 24
-  search_turn: 0.1
-  steer_kd: 0.3
-  steer_kp: 0.55
+# Convoying tunables — SIMULATION (Godot).
+# Loaded by virtual_server.py (sets agent.CONFIG_FILE to this file).
+# The live dashboard may rewrite this file when you drag sliders.
+
 leader:
-  blob_min_area: 6.0
-  dot_spacing_m: 0.0125
   grid_cols: 7
   grid_rows: 3
+  dot_spacing_m: 0.0125
+  blob_min_area: 6.0
+  target_span: 0.20
+  stop_span: 0.30
   span_deadband: 0.03
-  stop_span: 0.3
-  target_span: 0.2
-signs:
-  enabled: false           # follower follows the LEADER (stops when it stops);
-                           # it does not read AprilTags -> skips aruco each frame
-  min_tag_px: 38
-  stop_hold_s: 2.0
-  tag_meanings:
-    0: stop
-    1: slow
+
+control:
+  max_speed: 0.45
+  chase_speed: 0.30
+  steer_kp: 0.55
+  steer_kd: 0.30
+  dist_kp: 2.0
+  accel_rate: 0.05
+  decel_rate: 0.08
+  search_turn: 0.10
+  search_after_frames: 24
+  loop_hz: 20
+  error_alpha: 0.30
+  d_deadband: 0.01
+
+detection:
+  hold_frames: 3
+  roi_pad: 30
+  clahe: true
+
+turn:
+  excursion_thr: 0.35
+  excursion_thr_strong: 0.55
+  tilt_thr: 0.10
+  tilt_thr_strong: 0.18
+  sustain_frames: 4
+  clear_thr: 0.12
+  clear_tilt: 0.04
+  baseline_alpha: 0.02
+  self_stable_thr: 0.10
+  self_stable_alpha: 0.15
+  sign_invert: false
+
+camera:
+  matrix: null
+  dist_coeffs: null

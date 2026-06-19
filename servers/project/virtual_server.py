@@ -63,8 +63,17 @@ _CONFIG_SLIDERS = [
     ('control', 'accel_rate',    'Accel Rate',       0.00, 0.20, 0.01),
     ('control', 'decel_rate',    'Decel Rate',       0.00, 0.20, 0.01),
     ('control', 'search_turn',   'Search Turn',      0.00, 0.40, 0.01),
-    ('signs',   'min_tag_px',    'Min Tag Size (px)', 10,   100,   1),
-    ('signs',   'stop_hold_s',   'Stop Hold (s)',    0.50, 5.00, 0.10),
+    ('control', 'error_alpha',   'Error LP Alpha',   0.05, 1.00, 0.01),
+    ('control', 'd_deadband',    'D-term Deadband',  0.00, 0.10, 0.005),
+    ('detection', 'hold_frames', 'Hold Frames',      0,    10,    1),
+    ('detection', 'roi_pad',     'ROI Pad (px)',     0,    120,   2),
+    ('turn',     'excursion_thr',       'Excursion Thr',      0.05, 1.00, 0.01),
+    ('turn',     'excursion_thr_strong','Excursion Thr Strong',0.05, 1.00, 0.01),
+    ('turn',     'tilt_thr',            'Tilt Thr (rad)',     0.01, 0.50, 0.01),
+    ('turn',     'tilt_thr_strong',     'Tilt Thr Strong',    0.01, 0.50, 0.01),
+    ('turn',     'sustain_frames',      'Sustain Frames',     1,    20,   1),
+    ('turn',     'baseline_alpha',      'Baseline Alpha',     0.0,  0.20, 0.005),
+    ('turn',     'self_stable_thr',     'Self-Stable Thr',    0.0,  0.50, 0.01),
 ]
 
 
@@ -112,7 +121,7 @@ def _manual_loop():
     """Drive the follower from the arrow keys while in manual mode."""
     global _keys_stamp
     while not stop_event.is_set():
-        if not MANUAL_MODE:
+        if not MANUAL_MODE or getattr(agent, 'PAUSED', True):
             time.sleep(0.05)
             continue
         # auto-release keys if the browser stopped sending (safety)
@@ -136,11 +145,20 @@ def _manual_loop():
         time.sleep(0.05)
 
 
-def _visualize(frame):
-    """Always show the agent's annotated detection view (dots / state)."""
-    debug = getattr(agent, 'DEBUG_FRAME', None)
-    if debug is not None:
-        return debug
+def _visualize_overlay(frame):
+    """Draw the agent's detection overlay on the LIVE frame (never freezes).
+    Reads agent.DETECTION under the lock; if empty (pre-first-detection),
+    returns the raw frame."""
+    det = {}
+    with agent._det_lock:
+        det = dict(agent.DETECTION)
+    if not det:
+        return frame if frame is not None else np.zeros((480,640,3), dtype=np.uint8)
+    return agent._annotate(frame, det)
+
+
+def _visualize_raw(frame):
+    """Pure live feed — no overlay."""
     if frame is not None:
         return frame
     blank = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -149,9 +167,9 @@ def _visualize(frame):
     return blank
 
 
-# GodotCameraDriver.read() returns BGR (rgb=False) and is concurrent-safe, so the
-# agent and this feed both read it directly — no queue, no extra reader thread.
-generate_frames = make_frame_generator(lambda: camera, _visualize, quality=70, rgb=False)
+# GodotCameraDriver.read() returns BGR (rgb=False) and is concurrent-safe.
+generate_frames     = make_frame_generator(lambda: camera, _visualize_overlay, quality=70, rgb=False)
+generate_raw_frames = make_frame_generator(lambda: camera, _visualize_raw,     quality=70, rgb=False)
 
 
 @app.route('/')
@@ -165,11 +183,32 @@ def video():
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
+@app.route('/raw')
+def raw_video():
+    return Response(generate_raw_frames(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
 @app.route('/status')
 def status():
     st = dict(getattr(agent, 'STATUS', {}) or {})
     st['mode'] = 'manual' if MANUAL_MODE else 'auto'
+    st['paused'] = getattr(agent, 'PAUSED', True)
     return jsonify(st)
+
+
+@app.route('/start', methods=['POST'])
+def start():
+    agent.PAUSED = False
+    return jsonify({'paused': False})
+
+
+@app.route('/stop', methods=['POST'])
+def stop():
+    agent.PAUSED = True
+    if wheels:
+        wheels.set_wheels_speed(0.0, 0.0)
+    return jsonify({'paused': True})
 
 
 @app.route('/set_mode', methods=['POST'])
@@ -206,6 +245,15 @@ def reset():
 def start_leader():
     if wheels:
         wheels.start_leader()
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/stop_leader', methods=['POST'])
+def stop_leader():
+    # Leader eases to a stop and STAYS stopped until "Start Leader" is pressed
+    # again — use this to test the follower's slow/stop/speed-up reaction.
+    if wheels:
+        wheels.stop_leader()
     return jsonify({'status': 'ok'})
 
 
@@ -353,6 +401,8 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying �
 <div class="main">
   <div class="video-wrap">
     <img id="feed" src="/video">
+    <button id="viewBtn" onclick="toggleView()" style="position:absolute;top:8px;right:8px;
+      padding:4px 10px;font-size:11px;opacity:.75">Raw</button>
   </div>
   <div class="sidebar" id="sidebar">
     <!-- status -->
@@ -375,10 +425,15 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying �
         <button onmousedown="press('right',1)" onmouseup="press('right',0)" onmouseleave="press('right',0)">▶</button>
       </div>
       <p style="color:var(--muted);font-size:11px;margin:6px 0 0">Arrow keys / WASD in manual mode.</p>
+      <div class="mode-row" style="margin-top:8px">
+        <button id="startBtn" onclick="setPaused(false)" style="flex:1;background:#2ea043;border-color:#2ea043">Start</button>
+        <button id="stopBtn" onclick="setPaused(true)" style="flex:1">Stop</button>
+      </div>
       <div style="display:flex;gap:6px;margin-top:8px">
         <button style="flex:1" onclick="startLeader()">▶ Start Leader</button>
-        <button class="danger" style="flex:1" onclick="doReset()">↺ Reset</button>
+        <button style="flex:1;background:#b5651d;border-color:#b5651d" onclick="stopLeader()">⏸ Stop Leader</button>
       </div>
+      <button class="danger" style="width:100%;margin-top:6px" onclick="doReset()">↺ Reset</button>
     </div>
     <!-- config sliders -->
     <div class="card">
@@ -390,8 +445,12 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying �
       <div id="sliders-control"></div>
     </div>
     <div class="card">
-      <div class="card-h">Sign Config</div>
-      <div id="sliders-signs"></div>
+      <div class="card-h">Detection Config</div>
+      <div id="sliders-detection"></div>
+    </div>
+    <div class="card">
+      <div class="card-h">Turn Config</div>
+      <div id="sliders-turn"></div>
     </div>
   </div>
 </div>
@@ -401,11 +460,17 @@ let keys={{up:false,down:false,left:false,right:false}};
 function post(u,b){{return fetch(u,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(b||{{}})}});}}
 function sendKeys(){{post('/keys',keys);}}
 function press(k,on){{keys[k]=!!on;sendKeys();}}
+let _rawView=false;
+function toggleView(){{_rawView=!_rawView;document.getElementById('feed').src=_rawView?'/raw':'/video';document.getElementById('viewBtn').className=_rawView?'on':'';document.getElementById('viewBtn').textContent=_rawView?'Overlay':'Raw';}}
 function doReset(){{post('/reset',{{}});}}
 function startLeader(){{post('/start_leader',{{}});}}
+function stopLeader(){{post('/stop_leader',{{}});}}
 function setMode(m){{post('/set_mode',{{mode:m}}).then(()=>{{
   document.getElementById('autoBtn').className=m==='auto'?'on':'';
   document.getElementById('manBtn').className=m==='manual'?'on':'';}});}}
+function setPaused(p){{post(p?'/stop':'/start',{{}}).then(()=>{{
+  document.getElementById('startBtn').className=p?'':'on';
+  document.getElementById('stopBtn').className=p?'on':'';}});}}
 const KMAP={{ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right',w:'up',s:'down',a:'left',d:'right'}};
 addEventListener('keydown',e=>{{if(KMAP[e.key]&&!keys[KMAP[e.key]]){{keys[KMAP[e.key]]=true;sendKeys();e.preventDefault();}}}});
 addEventListener('keyup',e=>{{if(KMAP[e.key]){{keys[KMAP[e.key]]=false;sendKeys();e.preventDefault();}}}});
@@ -485,7 +550,10 @@ buildSliders();loadConfig();initSliders();
 setInterval(()=>{{
   fetch('/status').then(r=>r.json()).then(d=>{{
     const dot=document.getElementById('dot');
-    dot.style.background=d.mode==='manual'?'var(--accent)':'#3fb950';
+    const paused=d.paused;
+    dot.style.background=paused?'#e74c3c':(d.mode==='manual'?'var(--accent)':'#2ecc71');
+    document.getElementById('startBtn').className=paused?'':'on';
+    document.getElementById('stopBtn').className=paused?'on':'';
     document.getElementById('status').innerHTML=Object.entries(d).map(
       ([k,v])=>'<div class="row"><span class="k">'+k+'</span><span class="v">'+JSON.stringify(v)+'</span></div>'
     ).join('');

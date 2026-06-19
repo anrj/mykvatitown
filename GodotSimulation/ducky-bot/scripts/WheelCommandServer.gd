@@ -181,6 +181,12 @@ func _process(_delta: float) -> void:
 					node.start()
 			print("[WheelServer] start_leader dispatched")
 
+		elif msg_type == "stop_leader":
+			for node in get_tree().get_nodes_in_group("convoy_leader"):
+				if node.has_method("request_stop"):
+					node.request_stop()
+			print("[WheelServer] stop_leader dispatched")
+
 		elif msg_type == "get_state":
 			# Send current game state to Python
 			_send_state()

@@ -20,6 +20,7 @@ extends PathFollow3D
 
 var _speed: float = 0.0
 var _started: bool = false                     # set to true by start() — called from the dashboard button
+var _stopped: bool = false                     # external stop (dashboard) — stays until start() clears it
 var _hold_until: float = 0.0
 var _armed: bool = true                        # re-armed after leaving a stop point
 
@@ -31,8 +32,17 @@ func _ready() -> void:
 
 
 func start() -> void:
+	# Starts the leader, or resumes it after a dashboard stop.
 	_started = true
+	_stopped = false
 	print("[ConvoyLeader] started")
+
+
+func request_stop() -> void:
+	# External stop (dashboard button) — eases to 0 and STAYS stopped
+	# until start() is pressed again. (Stop-sign holds still use _hold_until.)
+	_stopped = true
+	print("[ConvoyLeader] external stop requested")
 
 
 func _process(delta: float) -> void:
@@ -44,8 +54,10 @@ func _process(delta: float) -> void:
 	var target := cruise_speed
 	if not _started:
 		target = 0.0                           # waiting for the "Start Leader" button
+	elif _stopped:
+		target = 0.0                           # dashboard stop — held until start()
 	elif now < _hold_until:
-		target = 0.0                           # currently holding at a stop
+		target = 0.0                           # currently holding at a stop sign
 	elif near and _armed:
 		_hold_until = now + stop_hold_s        # just arrived -> begin hold
 		_armed = false

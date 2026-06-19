@@ -227,6 +227,20 @@ class GodotWheelTransport:
             print(f"[GodotWheelTransport] start_leader send failed: {e}")
             self.close()
 
+    def send_stop_leader(self) -> None:
+        if not self._ensure_connected():
+            return
+        msg = {"type": "stop_leader"}
+        payload = json.dumps(msg).encode("utf-8")
+        header = struct.pack("!I", len(payload))
+        try:
+            assert self._sock is not None
+            self._sock.sendall(header + payload)
+            print("[GodotWheelTransport] Sent stop_leader")
+        except Exception as e:
+            print(f"[GodotWheelTransport] stop_leader send failed: {e}")
+            self.close()
+
     def send_change_scene(self, scene_path: str) -> None:
         if not self._ensure_connected():
             return
@@ -305,6 +319,9 @@ class GodotWheelsDriver(WheelsDriverAbs):
 
     def start_leader(self) -> None:
         self.transport.send_start_leader()
+
+    def stop_leader(self) -> None:
+        self.transport.send_stop_leader()
 
     def change_scene(self, scene_path: str) -> None:
         self.transport.send_change_scene(scene_path)

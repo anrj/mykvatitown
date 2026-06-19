@@ -22,16 +22,27 @@ control:
   search_turn: 0.10
   search_after_frames: 24
   loop_hz: 20
+  error_alpha: 0.30         # low-pass weight on new lateral_error/span (lower = smoother)
+  d_deadband: 0.01          # ignore D-term deltas below this (kills jitter kicks)
 
-signs:
-  enabled: false           # follower follows the LEADER (stops when it stops);
-                           # it does not read AprilTags -> skips aruco each frame
-  min_tag_px: 38
-  stop_hold_s: 2.0
-  tag_meanings:
-    0: stop
-    1: slow
+detection:
+  hold_frames: 3            # reuse last pose this many frames on a miss
+  roi_pad: 30               # px padding around last bbox for ROI retry
+  clahe: true               # CLAHE-gray retry on a miss
 
-camera:                     # fill in after running camera calibration
+turn:
+  excursion_thr: 0.35        # |lateral_error - baseline| to start a turn
+  excursion_thr_strong: 0.55 # required while the follower is self-correcting
+  tilt_thr: 0.10             # rad, row-tilt vs baseline to start a turn
+  tilt_thr_strong: 0.18      # rad, required while self-correcting
+  sustain_frames: 4          # consecutive same-sign frames to declare
+  clear_thr: 0.12            # excursion below this to clear a turn
+  clear_tilt: 0.04           # tilt below this to clear a turn
+  baseline_alpha: 0.02       # EMA rate for lateral/tilt baselines
+  self_stable_thr: 0.10      # |steer| EMA above this => follower unstable
+  self_stable_alpha: 0.15    # EMA rate for |steer|
+  sign_invert: false         # flip L/R label (confirm empirically once)
+
+camera:                      # unused now (no solvePnP); kept for compatibility
   matrix: null
   dist_coeffs: null

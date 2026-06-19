@@ -49,8 +49,17 @@ _CONFIG_SLIDERS = [
     ('control', 'accel_rate',    'Accel Rate',        0.00, 0.20, 0.01),
     ('control', 'decel_rate',    'Decel Rate',        0.00, 0.20, 0.01),
     ('control', 'search_turn',   'Search Turn',       0.00, 0.40, 0.01),
-    ('signs',   'min_tag_px',    'Min Tag Size (px)',  10,   100,    1),
-    ('signs',   'stop_hold_s',   'Stop Hold (s)',     0.50, 5.00, 0.10),
+    ('control', 'error_alpha',   'Error LP Alpha',    0.05, 1.00, 0.01),
+    ('control', 'd_deadband',    'D-term Deadband',   0.00, 0.10, 0.005),
+    ('detection', 'hold_frames', 'Hold Frames',       0,    10,    1),
+    ('detection', 'roi_pad',     'ROI Pad (px)',      0,    120,   2),
+    ('turn',     'excursion_thr',       'Excursion Thr',      0.05, 1.00, 0.01),
+    ('turn',     'excursion_thr_strong','Excursion Thr Strong',0.05, 1.00, 0.01),
+    ('turn',     'tilt_thr',            'Tilt Thr (rad)',     0.01, 0.50, 0.01),
+    ('turn',     'tilt_thr_strong',     'Tilt Thr Strong',    0.01, 0.50, 0.01),
+    ('turn',     'sustain_frames',      'Sustain Frames',     1,    20,   1),
+    ('turn',     'baseline_alpha',      'Baseline Alpha',     0.0,  0.20, 0.005),
+    ('turn',     'self_stable_thr',     'Self-Stable Thr',    0.0,  0.50, 0.01),
 ]
 
 
@@ -160,18 +169,36 @@ def _manual_loop():
 _BLANK = np.zeros((480, 640, 3), dtype=np.uint8)
 
 
-def _visualize(frame):
-    """Always show the agent's annotated detection view (dots / lane / state),
-    so you can see exactly what the follower perceives. Falls back to the live
-    frame until the agent produces its first overlay.
+class _LiveFrameSource:
+    """Read-only frame source for the VIDEO thread â€” returns the latest frame
+    without copying. Safe because _camera_loop assigns a new array (never
+    modifies in place) and numpy ref-swaps are GIL-atomic. The JPEG encoder
+    (_raw) and _annotate (_overlay) each copy internally, so no torn reads."""
+    def read(self):
+        with _latest_lock:
+            f = _latest_frame
+        if f is None:
+            return False, None
+        return True, f
 
-    This view updates at the agent's detection rate, which is INDEPENDENT of the
-    agent's control loop and frame supply â€” a slow video does not slow the bot
-    or cause it to lose the dot grid.
-    """
-    dbg = getattr(agent, 'DEBUG_FRAME', None)
-    if dbg is not None:
-        return dbg
+
+_live_source = _LiveFrameSource()
+
+
+def _visualize_overlay(frame):
+    """Draw the agent's detection overlay on the LIVE frame (never freezes).
+    Reads agent.DETECTION under the lock; if empty (pre-first-detection),
+    returns the raw frame."""
+    det = {}
+    with agent._det_lock:
+        det = dict(agent.DETECTION)
+    if not det:
+        return frame if frame is not None else _BLANK.copy()
+    return agent._annotate(frame, det)
+
+
+def _visualize_raw(frame):
+    """Pure live feed â€” no overlay."""
     if frame is not None:
         return frame
     img = _BLANK.copy()
@@ -180,7 +207,8 @@ def _visualize(frame):
     return img
 
 
-generate_frames = make_frame_generator(lambda: _frame_source, _visualize, quality=70, rgb=False)
+generate_frames     = make_frame_generator(lambda: _live_source, _visualize_overlay, quality=70, rgb=False)
+generate_raw_frames = make_frame_generator(lambda: _live_source, _visualize_raw,     quality=70, rgb=False)
 
 
 @app.route('/')
@@ -191,6 +219,12 @@ def index():
 @app.route('/video')
 def video():
     return Response(generate_frames(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route('/raw')
+def raw_video():
+    return Response(generate_raw_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
@@ -393,6 +427,8 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying â€
 <div class="main">
   <div class="video-wrap">
     <img id="feed" src="/video">
+    <button id="viewBtn" onclick="toggleView()" style="position:absolute;top:8px;right:8px;
+      padding:4px 10px;font-size:11px;opacity:.75">Raw</button>
   </div>
   <div class="sidebar" id="sidebar">
     <div class="card">
@@ -427,8 +463,12 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying â€
       <div id="sliders-control"></div>
     </div>
     <div class="card">
-      <div class="card-h">Sign Config</div>
-      <div id="sliders-signs"></div>
+      <div class="card-h">Detection Config</div>
+      <div id="sliders-detection"></div>
+    </div>
+    <div class="card">
+      <div class="card-h">Turn Config</div>
+      <div id="sliders-turn"></div>
     </div>
   </div>
 </div>
@@ -438,6 +478,8 @@ let keys={{up:false,down:false,left:false,right:false}};
 function post(u,b){{return fetch(u,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(b||{{}})}});}}
 function sendKeys(){{post('/keys',keys);}}
 function press(k,on){{keys[k]=!!on;sendKeys();}}
+let _rawView=false;
+function toggleView(){{_rawView=!_rawView;document.getElementById('feed').src=_rawView?'/raw':'/video';document.getElementById('viewBtn').className=_rawView?'on':'';document.getElementById('viewBtn').textContent=_rawView?'Overlay':'Raw';}}
 function setMode(m){{post('/set_mode',{{mode:m}}).then(()=>{{
   document.getElementById('autoBtn').className=m==='auto'?'on':'';
   document.getElementById('manBtn').className=m==='manual'?'on':'';}});}}
