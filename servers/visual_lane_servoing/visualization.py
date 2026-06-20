@@ -91,10 +91,19 @@ def _info_strip(width, debug_info, pwm_left, pwm_right):
 
     # Status
     detected = debug_info['lane_detected']
-    cv2.putText(canvas, "LANE OK" if detected else "NO LANE",
-                (20, 105), font, 0.5, (0, 255, 0) if detected else (0, 0, 255), 1)
+    red_stop_detected = debug_info.get('red_stop_detected', False)
+    
+    status_text = "RED STOP!" if red_stop_detected else ("LANE OK" if detected else "NO LANE")
+    status_color = (0, 0, 255) if red_stop_detected else ((0, 255, 0) if detected else (0, 0, 255))
+    
+    cv2.putText(canvas, status_text,
+                (20, 105), font, 0.5, status_color, 1)
     cv2.putText(canvas, f"px:{debug_info['total_lane_pixels']}  f:{debug_info.get('frame_count',0)}",
                 (300, 105), font, 0.4, (200, 200, 200), 1)
+    
+    if red_stop_detected:
+        red_px = debug_info.get('red_pixels', 0)
+        cv2.putText(canvas, f"red:{red_px}px", (20, 115), font, 0.4, (0, 0, 255), 1)
 
     return canvas
 

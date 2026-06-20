@@ -110,12 +110,20 @@ def update_hsv():
     data = request.json
     mod = _get_student_module()
     current = mod.get_hsv_bounds()
-    current.update({k: int(v) for k, v in data.items()})
+    current.update({k: int(v) if isinstance(v, (int, float)) else v for k, v in data.items()})
     mod.set_hsv_bounds(
         [current['yellow_lower_h'], current['yellow_lower_s'], current['yellow_lower_v']],
         [current['yellow_upper_h'], current['yellow_upper_s'], current['yellow_upper_v']],
         [current['white_lower_h'],  current['white_lower_s'],  current['white_lower_v']],
         [current['white_upper_h'],  current['white_upper_s'],  current['white_upper_v']],
+        red_lower_h1=current.get('red_lower_h1'),
+        red_upper_h1=current.get('red_upper_h1'),
+        red_lower_h2=current.get('red_lower_h2'),
+        red_upper_h2=current.get('red_upper_h2'),
+        red_lower_s=current.get('red_lower_s'),
+        red_upper_s=current.get('red_upper_s'),
+        red_lower_v=current.get('red_lower_v'),
+        red_upper_v=current.get('red_upper_v'),
     )
     try:
         with open(LANE_HSV_CONFIG_FILE, 'w') as f:

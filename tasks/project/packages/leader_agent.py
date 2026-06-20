@@ -1,3 +1,10 @@
+"""
+Leader bot agent for convoying project.
+
+The leader detects yellow/white lane markings and steers to stay centered.
+It also detects red stop lines and stops when encountering them.
+"""
+
 import os
 import yaml
 import numpy as np
@@ -6,7 +13,6 @@ from collections import deque
 from typing import Tuple
 
 from tasks.visual_lane_servoing.packages import visual_servoing_activity as student
-from tasks.visual_lane_servoing.packages.cuvrve_behavior import detect_curve
 
 _CONFIG_FILE = os.path.normpath(os.path.join(
     os.path.dirname(__file__), '..', '..', '..', 'config', 'lane_servoing_config.yaml'
@@ -23,6 +29,7 @@ def detect_lines_in_slices(
     mask_white:  np.ndarray,
     h: int,
 ) -> Tuple[list, list]:
+    """Detect yellow and white line positions in image slices."""
     slice_height = int(h * 0.35 / _NUM_SLICES)
     start_y      = int(h * _ROI_START)
     yellow_xs, white_xs = [], []
@@ -43,7 +50,8 @@ def detect_lines_in_slices(
     return yellow_xs, white_xs
 
 
-class LaneServoingAgent:
+class LeaderAgent:
+    """Leader bot that follows lanes and detects red stop lines."""
 
     def __init__(self, config_path: str = None):
         path = config_path or _CONFIG_FILE
@@ -69,9 +77,14 @@ class LaneServoingAgent:
         self._lane_half_width   = float(_LINE_OFFSET)
         self._left_history      = deque(maxlen=3)
         self._right_history     = deque(maxlen=3)
-        self.last_debug_info    = self._empty_debug_info(480, 640)
+
+        # Red stop line detection state
+        self.red_consecutive_count = 0
+        self.red_stop_sustain = 1  # immediate response
+        self.red_stop_active = False
 
     def _calculate_error(self, yellow_xs, white_xs, left_det, right_det, w):
+        """Calculate steering error based on lane detection."""
         if left_det and right_det and yellow_xs and white_xs:
             y_mean = float(np.mean(yellow_xs))
             w_mean = float(np.mean(white_xs))
@@ -89,12 +102,14 @@ class LaneServoingAgent:
         return float(np.clip(error / (w / 2.0), -1.0, 1.0))
 
     def _calculate_steering(self, error: float) -> float:
+        """Calculate steering command from error."""
         error_diff       = error - self._prev_error
         self._prev_error = error
         steering = self.p_gain * error + self.d_gain * error_diff
         return float(np.clip(steering, -self.max_steer, self.max_steer))
 
     def _motor_commands(self, steering: float, recovery: bool, is_curve: bool, both_visible: bool):
+        """Convert steering error to motor PWM commands."""
         if recovery:
             return 0.0, 0.0
 
@@ -115,6 +130,7 @@ class LaneServoingAgent:
         return float(np.clip(left, 0.0, 1.0)), float(np.clip(right, 0.0, 1.0))
 
     def _smooth(self, left, right, both_visible):
+        """Smooth motor commands over frames."""
         buf = 2 if both_visible else 1
         if self._left_history.maxlen != buf:
             self._left_history  = deque(maxlen=buf)
@@ -125,6 +141,15 @@ class LaneServoingAgent:
                 sum(self._right_history) / len(self._right_history))
 
     def compute_commands(self, image: np.ndarray) -> Tuple[float, float]:
+        """
+        Detect lanes and red lines, compute motor commands.
+        
+        Args:
+            image: RGB image from camera
+            
+        Returns:
+            (left_pwm, right_pwm) motor commands
+        """
         self.frame_count += 1
         bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
@@ -132,98 +157,53 @@ class LaneServoingAgent:
             mask_left, mask_right = student.detect_lane_markings(bgr)
             mask_red = student.detect_red_line(bgr)
         except Exception as e:
-            print(f"[Agent] detection error: {e}")
+            print(f"[LeaderAgent] detection error: {e}")
             return 0.0, 0.0
 
         # Check for red stop line
         red_pixels = int(np.count_nonzero(mask_red))
-        red_detected = red_pixels > 100  # threshold for red line presence
+        red_frame_detected = red_pixels > 100  # threshold for red line presence
         
+        # Accumulate red frames with hysteresis
+        if red_frame_detected:
+            self.red_consecutive_count += 1
+        else:
+            self.red_consecutive_count = 0
+        
+        red_detected = self.red_consecutive_count >= self.red_stop_sustain
+        
+        # Signal red stop if detected
+        if red_detected and not self.red_stop_active:
+            self.red_stop_active = True
+            return 0.0, 0.0  # Stop immediately
+        elif not red_detected and self.red_stop_active:
+            self.red_stop_active = False
+
         if red_detected:
-            # Stop immediately when red line detected
-            self.last_debug_info = {
-                'roi':               image,
-                'lane_mask':         np.zeros_like(bgr[:, :, 0]),
-                'white_mask':        np.zeros_like(bgr[:, :, 0]),
-                'yellow_mask':       np.zeros_like(bgr[:, :, 0]),
-                'red_mask':          (mask_red * 255).astype(np.uint8),
-                'total_lane_pixels': 0,
-                'lateral_error':     0.0,
-                'lane_detected':     False,
-                'frame_count':       self.frame_count,
-                'red_stop_detected': True,
-                'red_pixels':        red_pixels,
-            }
+            return 0.0, 0.0  # Stay stopped
+
+        # Detect lanes
+        h, w = bgr.shape[:2]
+        yellow_xs, white_xs = detect_lines_in_slices(mask_left, mask_right, h)
+
+        left_det  = len(yellow_xs) > 0
+        right_det = len(white_xs) > 0
+        both_visible = left_det and right_det
+
+        if not (left_det or right_det):
+            # Lost both lines - stop to avoid collision
             return 0.0, 0.0
 
-        mask_y = (mask_left  * 255).astype(np.uint8)
-        mask_w = (mask_right * 255).astype(np.uint8)
+        # Calculate steering error
+        error = self._calculate_error(yellow_xs, white_xs, left_det, right_det, w)
+        steering = self._calculate_steering(error)
 
-        yellow_pixels = int(np.count_nonzero(mask_y))
-        white_pixels  = int(np.count_nonzero(mask_w))
-        total_pixels  = yellow_pixels + white_pixels
+        # Check for curve (high pixel count = sharp turn)
+        total_lane_pixels = int(np.count_nonzero(mask_left)) + int(np.count_nonzero(mask_right))
+        is_curve = total_lane_pixels > self.curve_threshold
 
-        combined = np.clip(mask_left + mask_right, 0, 1)
-        self.last_debug_info = {
-            'roi':               image,
-            'lane_mask':         (combined * 255).astype(np.uint8),
-            'white_mask':        mask_w,
-            'yellow_mask':       mask_y,
-            'red_mask':          (mask_red * 255).astype(np.uint8),
-            'total_lane_pixels': total_pixels,
-            'lateral_error':     float(np.clip(self._prev_error, -1.0, 1.0)),
-            'lane_detected':     total_pixels >= self.detection_threshold,
-            'frame_count':       self.frame_count,
-            'red_stop_detected': False,
-            'red_pixels':        red_pixels,
-        }
-
-        h, w      = mask_y.shape
-        left_det  = yellow_pixels > 0
-        right_det = white_pixels  > 0
-        recovery  = total_pixels  < self.detection_threshold
-
-        yellow_xs, white_xs = detect_lines_in_slices(mask_y, mask_w, h)
-        both_visible        = left_det and right_det and not recovery
-        is_curve, curve_dir = detect_curve(yellow_xs, white_xs, self.curve_threshold)
-
-        raw_error            = self._calculate_error(yellow_xs, white_xs, left_det, right_det, w)
-        self._filtered_error = 0.7 * self._filtered_error + 0.3 * raw_error
-        steering             = self._calculate_steering(self._filtered_error)
-        left, right          = self._motor_commands(steering, recovery, is_curve, both_visible)
-        left, right          = self._smooth(left, right, both_visible)
-
-        slice_height = int(h * 0.35 / _NUM_SLICES)
-        start_y      = int(h * _ROI_START)
-        self.last_debug_info.update({
-            'yellow_xs': yellow_xs,
-            'white_xs':  white_xs,
-            'slice_ys':  [start_y + i * slice_height + slice_height // 2 for i in range(_NUM_SLICES)],
-            'is_curve':  is_curve,
-            'curve_dir': curve_dir,
-        })
+        # Compute motor commands
+        left, right = self._motor_commands(steering, False, is_curve, both_visible)
+        left, right = self._smooth(left, right, both_visible)
 
         return left, right
-
-    def step(self, image: np.ndarray, wheels_driver) -> Tuple[float, float]:
-        left, right = self.compute_commands(image)
-        wheels_driver.set_wheels_speed(left, right)
-        return left, right
-
-    def get_debug_info(self, image: np.ndarray) -> dict:
-        return self.last_debug_info
-
-    def _empty_debug_info(self, h, w):
-        return {
-            'roi':               np.zeros((h, w, 3), dtype=np.uint8),
-            'lane_mask':         np.zeros((h, w),    dtype=np.uint8),
-            'white_mask':        np.zeros((h, w),    dtype=np.uint8),
-            'yellow_mask':       np.zeros((h, w),    dtype=np.uint8),
-            'red_mask':          np.zeros((h, w),    dtype=np.uint8),
-            'total_lane_pixels': 0,
-            'lateral_error':     0.0,
-            'lane_detected':     False,
-            'frame_count':       0,
-            'red_stop_detected': False,
-            'red_pixels':        0,
-        }

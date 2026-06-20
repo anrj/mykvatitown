@@ -46,3 +46,27 @@ turn:
 camera:                      # unused now (no solvePnP); kept for compatibility
   matrix: null
   dist_coeffs: null
+
+# Lane detection parameters for autonomous navigation
+p_gain: 0.1
+d_gain: 0.35
+max_steer: 0.4
+base_speed: 0.2
+curve_speed: 0.2
+curve_threshold: 350
+steering_threshold: 0.2
+curve_boost: 1.3
+detection_threshold: 500
+
+# Red stop line detection
+red_stop:
+  enabled: true
+  lower_h1: 0
+  upper_h1: 10
+  lower_h2: 170
+  upper_h2: 179
+  lower_s: 80       # lower saturation = very lenient (catch red from very far away)
+  upper_s: 255
+  lower_v: 60
+  upper_v: 255
+  detection_threshold: 150  # pixels in center lane ROI needed to trigger stop

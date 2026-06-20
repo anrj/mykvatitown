@@ -29,6 +29,8 @@ import cv2
 import numpy as np
 import yaml
 
+from tasks.project.packages import preprocessing
+
 # Published for the web UI / debugging (the servers read these).
 # DETECTION is a lock-protected dict of the latest detection + control results.
 # The video thread reads it to draw the overlay on the LIVE frame (so the feed
@@ -559,6 +561,9 @@ def main(camera, wheels, leds, stop_event):
     last_e = 0.0               # last lateral error while the leader was seen
     last_span = 0.0            # last span while seen (tells us WHY we lost it)
     last_turn = 0.0            # last steering command while following
+    red_stop_active = False    # track if we've already signaled a red stop
+    red_consecutive_count = 0  # require N consecutive frames of red before stopping
+    red_stop_sustain = 1       # require 1 frame of red (immediate response, no delay)
 
     try:
         while not stop_event.is_set():
@@ -567,6 +572,28 @@ def main(camera, wheels, leds, stop_event):
             if not ok or frame is None:
                 stop_event.wait(0.02)
                 continue
+
+            # Check for red stop lines first
+            red_pixels = preprocessing.detect_red_stop(frame, CFG.get('red_stop', {}))
+            red_threshold = CFG.get('red_stop', {}).get('detection_threshold', 800)
+            red_frame_detected = red_pixels >= red_threshold
+            
+            # Count consecutive frames of red (require sustain frames to avoid noise)
+            if red_frame_detected:
+                red_consecutive_count += 1
+            else:
+                red_consecutive_count = 0
+            
+            # Trigger stop only if sustained red detection
+            red_detected = red_consecutive_count >= red_stop_sustain
+            
+            # Signal leader to stop if red detected
+            if red_detected and not red_stop_active:
+                if wheels:
+                    wheels.stop_leader()
+                red_stop_active = True
+            elif not red_detected and red_stop_active:
+                red_stop_active = False
 
             found, lateral_error, span, centers, method, quality = _leader.detect(frame)
 
@@ -622,6 +649,7 @@ def main(camera, wheels, leds, stop_event):
                 'steer': steer, 'turn_dir': tdir, 'turn_active': tactive,
                 'excursion': _turn.excursion, 'tilt': _turn.tilt,
                 'lateral_baseline': _turn.lateral_baseline,
+                'red_detected': red_detected, 'red_pixels': red_pixels,
             }
             with _det_lock:
                 DETECTION.update(det)
@@ -635,6 +663,7 @@ def main(camera, wheels, leds, stop_event):
                 'tilt': round(_turn.tilt, 3),
                 'detection_method': method, 'quality': round(quality, 2),
                 'lane_fallback': False,
+                'red_detected': red_detected, 'red_pixels': red_pixels,
             }
 
             stop_event.wait(dt)

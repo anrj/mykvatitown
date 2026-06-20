@@ -13,7 +13,7 @@ SCRIPTS_DIR = PROJECT_ROOT / 'scripts'
 GODOT_PROJECT = GODOT_DIR
 GODOT_SCENES = {
     'braitenberg': 'res://scenes/braitenberg.tscn',
-    'visual_lane_servoing': 'res://scenes/maps/lane_follower.tscn',
+    'visual_lane_servoing': 'res://scenes/maps/convoing.tscn',
     'introduction': 'res://scenes/maps/introduction.tscn',
     'modcon': 'res://scenes/maps/Modconpath.tscn',
     'navigator': 'res://scenes/maps/map_follower.tscn',

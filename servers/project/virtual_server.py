@@ -44,36 +44,21 @@ from launcher.ports import find_available_port
 from launcher.config import GODOT_SCENES
 from servers.common import make_frame_generator, shutdown_cleanup, suppress_http_logs
 
-import tasks.project.packages.agent as agent
+import tasks.project.packages.autonomous_agent as agent
 
 _SIM_CONFIG_FILE = 'project_config_sim.yaml'
-agent.CONFIG_FILE = _SIM_CONFIG_FILE          # must be set before agent.main() is called
+# agent.CONFIG_FILE will use the default, or can be overridden
 CONFIG_PATH = os.path.join(project_root, 'config', _SIM_CONFIG_FILE)
 
 # Slider schema: (section, key, label, min, max, step)
 _CONFIG_SLIDERS = [
-    ('leader',  'target_span',   'Target Span',      0.05, 0.80, 0.01),
-    ('leader',  'stop_span',     'Stop Span',        0.10, 0.90, 0.01),
-    ('leader',  'span_deadband', 'Span Deadband',    0.00, 0.10, 0.005),
-    ('control', 'max_speed',     'Max Speed',        0.00, 1.00, 0.01),
-    ('control', 'chase_speed',   'Chase Speed',      0.00, 0.60, 0.01),
-    ('control', 'steer_kp',      'Steer Kp',         0.00, 2.00, 0.01),
-    ('control', 'steer_kd',      'Steer Kd',         0.00, 1.00, 0.01),
-    ('control', 'dist_kp',       'Dist Kp',          0.00, 5.00, 0.01),
-    ('control', 'accel_rate',    'Accel Rate',       0.00, 0.20, 0.01),
-    ('control', 'decel_rate',    'Decel Rate',       0.00, 0.20, 0.01),
-    ('control', 'search_turn',   'Search Turn',      0.00, 0.40, 0.01),
-    ('control', 'error_alpha',   'Error LP Alpha',   0.05, 1.00, 0.01),
-    ('control', 'd_deadband',    'D-term Deadband',  0.00, 0.10, 0.005),
-    ('detection', 'hold_frames', 'Hold Frames',      0,    10,    1),
-    ('detection', 'roi_pad',     'ROI Pad (px)',     0,    120,   2),
-    ('turn',     'excursion_thr',       'Excursion Thr',      0.05, 1.00, 0.01),
-    ('turn',     'excursion_thr_strong','Excursion Thr Strong',0.05, 1.00, 0.01),
-    ('turn',     'tilt_thr',            'Tilt Thr (rad)',     0.01, 0.50, 0.01),
-    ('turn',     'tilt_thr_strong',     'Tilt Thr Strong',    0.01, 0.50, 0.01),
-    ('turn',     'sustain_frames',      'Sustain Frames',     1,    20,   1),
-    ('turn',     'baseline_alpha',      'Baseline Alpha',     0.0,  0.20, 0.005),
-    ('turn',     'self_stable_thr',     'Self-Stable Thr',    0.0,  0.50, 0.01),
+    ('p_gain',     'p_gain',        'P Gain',           0.00, 1.00, 0.01),
+    ('d_gain',     'd_gain',        'D Gain',           0.00, 1.00, 0.01),
+    ('max_steer',  'max_steer',     'Max Steer',        0.0,  1.0,  0.01),
+    ('base_speed', 'base_speed',    'Base Speed',       0.0,  1.0,  0.01),
+    ('curve_speed','curve_speed',   'Curve Speed',      0.0,  1.0,  0.01),
+    ('curve_threshold', 'curve_threshold', 'Curve Threshold', 100, 1000, 10),
+    ('red_stop', 'detection_threshold', 'Red Stop Threshold', 50, 500, 10),
 ]
 
 

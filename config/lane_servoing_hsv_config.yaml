@@ -10,3 +10,12 @@ yellow_lower_v: 100
 yellow_upper_h: 40
 yellow_upper_s: 255
 yellow_upper_v: 255
+# Red stop lines — HSV wraps at H=180, so we check both low (0-10) and high (170-179)
+red_lower_h1: 0
+red_upper_h1: 10
+red_lower_h2: 170
+red_upper_h2: 179
+red_lower_s: 80
+red_upper_s: 255
+red_lower_v: 50
+red_upper_v: 255
