@@ -1,48 +1,59 @@
-# Convoying tunables — REAL HARDWARE (follower Duckiebot).
-# Loaded by real_server.py. Tune these via the dashboard sliders on the bot.
-# The live dashboard may rewrite this file when you drag sliders.
+# Convoying follower — REAL HARDWARE.
+# Lane servoing gains come from config/lane_servoing_config.yaml (shared).
+# Turn arc params are the same finetuned values as the leader.
 
 leader:
   grid_cols: 7
   grid_rows: 3
   dot_spacing_m: 0.0125
-  blob_min_area: 4.0        # real camera may need finer blob detection
-  target_span: 0.12         # tune: leader width in frame at desired follow distance
-  stop_span: 0.18           # tune: leader this wide => too close, hold still
+  blob_min_area: 4.0
+  target_span: 0.12
+  stop_span: 0.18
   span_deadband: 0.03
 
 control:
-  max_speed: 0.35           # conservative starting speed for real hardware
-  chase_speed: 0.20
-  steer_kp: 0.45
-  steer_kd: 0.10
-  dist_kp: 1.5
+  max_speed: 0.45
+  chase_speed: 0.30
+  dist_kp: 2.0
   accel_rate: 0.05
   decel_rate: 0.08
-  search_turn: 0.10
   search_after_frames: 24
-  loop_hz: 20
-  error_alpha: 0.30         # low-pass weight on new lateral_error/span (lower = smoother)
-  d_deadband: 0.01          # ignore D-term deltas below this (kills jitter kicks)
+  loop_hz: 24
+  error_alpha: 0.3
 
 detection:
-  hold_frames: 3            # reuse last pose this many frames on a miss
-  roi_pad: 30               # px padding around last bbox for ROI retry
-  clahe: true               # CLAHE-gray retry on a miss
+  hold_frames: 3
+  roi_pad: 30
+  clahe: true
 
 turn:
-  excursion_thr: 0.35        # |lateral_error - baseline| to start a turn
-  excursion_thr_strong: 0.55 # required while the follower is self-correcting
-  tilt_thr: 0.10             # rad, row-tilt vs baseline to start a turn
-  tilt_thr_strong: 0.18      # rad, required while self-correcting
-  sustain_frames: 4          # consecutive same-sign frames to declare
-  clear_thr: 0.12            # excursion below this to clear a turn
-  clear_tilt: 0.04           # tilt below this to clear a turn
-  baseline_alpha: 0.02       # EMA rate for lateral/tilt baselines
-  self_stable_thr: 0.10      # |steer| EMA above this => follower unstable
-  self_stable_alpha: 0.15    # EMA rate for |steer|
-  sign_invert: false         # flip L/R label (confirm empirically once)
+  excursion_thr: 0.35
+  excursion_thr_strong: 0.55
+  tilt_thr: 0.10
+  tilt_thr_strong: 0.18
+  sustain_frames: 4
+  clear_thr: 0.12
+  clear_tilt: 0.04
+  baseline_alpha: 0.02
+  self_stable_thr: 0.10
+  self_stable_alpha: 0.15
+  sign_invert: false
+  # Turn arc params — same as leader (finetuned by traffic team at 24fps)
+  preturn_right_s: 0.83
+  preturn_left_s: 0.33
+  preturn_speed: 0.20
+  turn_right_s: 1.04
+  turn_left_s: 2.33
+  turn_right_pwm: [0.60, 0.05]
+  turn_left_pwm: [0.20, 0.50]
+  exit_s: 0.125
+  exit_speed: 0.40
+  turn_cooldown_s: 3.0
 
-camera:                      # unused now (no solvePnP); kept for compatibility
+lane_fallback:
+  enabled: true
+  lane_follow_timeout_s: 5.0
+
+camera:
   matrix: null
   dist_coeffs: null

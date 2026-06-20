@@ -1,6 +1,5 @@
-# Convoying tunables — SIMULATION (Godot).
-# Loaded by virtual_server.py (sets agent.CONFIG_FILE to this file).
-# The live dashboard may rewrite this file when you drag sliders.
+# Convoying follower — SIMULATION.
+# Lane servoing gains come from config/lane_servoing_config.yaml (shared).
 
 leader:
   grid_cols: 7
@@ -14,16 +13,12 @@ leader:
 control:
   max_speed: 0.45
   chase_speed: 0.30
-  steer_kp: 0.55
-  steer_kd: 0.30
   dist_kp: 2.0
   accel_rate: 0.05
   decel_rate: 0.08
-  search_turn: 0.10
   search_after_frames: 24
-  loop_hz: 20
-  error_alpha: 0.30
-  d_deadband: 0.01
+  loop_hz: 24
+  error_alpha: 0.3
 
 detection:
   hold_frames: 3
@@ -42,6 +37,20 @@ turn:
   self_stable_thr: 0.10
   self_stable_alpha: 0.15
   sign_invert: false
+  preturn_right_s: 0.83
+  preturn_left_s: 0.33
+  preturn_speed: 0.25
+  turn_right_s: 1.5
+  turn_left_s: 1.8
+  turn_right_pwm: [0.30, 0.15]
+  turn_left_pwm: [0.15, 0.30]
+  exit_s: 0.125
+  exit_speed: 0.35
+  turn_cooldown_s: 3.0
+
+lane_fallback:
+  enabled: true
+  lane_follow_timeout_s: 5.0
 
 camera:
   matrix: null

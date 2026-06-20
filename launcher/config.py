@@ -19,6 +19,7 @@ GODOT_SCENES = {
     'navigator': 'res://scenes/maps/map_follower.tscn',
     'object_detection': 'res://scenes/maps/lane_detect.tscn',
     'project': 'res://scenes/maps/convoing.tscn',
+    'leader': 'res://scenes/maps/convoing_leader.tscn',
     'convoying': 'res://scenes/maps/convoing.tscn',
 }
 

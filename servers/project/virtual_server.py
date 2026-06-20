@@ -57,14 +57,10 @@ _CONFIG_SLIDERS = [
     ('leader',  'span_deadband', 'Span Deadband',    0.00, 0.10, 0.005),
     ('control', 'max_speed',     'Max Speed',        0.00, 1.00, 0.01),
     ('control', 'chase_speed',   'Chase Speed',      0.00, 0.60, 0.01),
-    ('control', 'steer_kp',      'Steer Kp',         0.00, 2.00, 0.01),
-    ('control', 'steer_kd',      'Steer Kd',         0.00, 1.00, 0.01),
     ('control', 'dist_kp',       'Dist Kp',          0.00, 5.00, 0.01),
     ('control', 'accel_rate',    'Accel Rate',       0.00, 0.20, 0.01),
     ('control', 'decel_rate',    'Decel Rate',       0.00, 0.20, 0.01),
-    ('control', 'search_turn',   'Search Turn',      0.00, 0.40, 0.01),
     ('control', 'error_alpha',   'Error LP Alpha',   0.05, 1.00, 0.01),
-    ('control', 'd_deadband',    'D-term Deadband',  0.00, 0.10, 0.005),
     ('detection', 'hold_frames', 'Hold Frames',      0,    10,    1),
     ('detection', 'roi_pad',     'ROI Pad (px)',     0,    120,   2),
     ('turn',     'excursion_thr',       'Excursion Thr',      0.05, 1.00, 0.01),
@@ -74,6 +70,7 @@ _CONFIG_SLIDERS = [
     ('turn',     'sustain_frames',      'Sustain Frames',     1,    20,   1),
     ('turn',     'baseline_alpha',      'Baseline Alpha',     0.0,  0.20, 0.005),
     ('turn',     'self_stable_thr',     'Self-Stable Thr',    0.0,  0.50, 0.01),
+    ('lane_fallback', 'lane_follow_timeout_s', 'Lane Timeout (s)', 1.0, 15.0, 0.5),
 ]
 
 
@@ -451,6 +448,10 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying â€
     <div class="card">
       <div class="card-h">Turn Config</div>
       <div id="sliders-turn"></div>
+    </div>
+    <div class="card">
+      <div class="card-h">Lane Fallback</div>
+      <div id="sliders-lane_fallback"></div>
     </div>
   </div>
 </div>

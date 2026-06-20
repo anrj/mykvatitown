@@ -1,0 +1,36 @@
+# Convoy leader — SIMULATION.
+# Sim-specific: conservative turn PWM (no deadzone in Godot), approach zone
+# for early red line detection, cleaner rendering → sensitive thresholds.
+
+control:
+  loop_hz: 24
+
+red_line:
+  red_strip_frac: 0.32
+  red_approach_frac: 0.50
+  red_roi_left: 0.12
+  red_roi_right: 0.90
+  red_pixel_frac: 0.005
+  red_approach_pixel_frac: 0.002
+  red_min_area: 30
+  red_min_width_frac: 0.12
+  red_line_close_y2_ratio: 0.3
+
+turn:
+  stop_hold_s: 2.08
+  preturn_right_s: 0.83
+  preturn_left_s: 0.33
+  preturn_speed: 0.25
+  turn_right_s: 1.5
+  turn_left_s: 1.8
+  turn_right_pwm: [0.30, 0.15]
+  turn_left_pwm: [0.15, 0.30]
+  exit_s: 0.125
+  exit_speed: 0.35
+  red_ignore_s: 4.17
+  approach_slow_factor: 0.85
+  turn_sequence: ['R', 'L', 'S', 'S']
+  turn_cooldown_s: 3.0
+
+led:
+  blink_hz: 5.0

@@ -1,0 +1,36 @@
+# Convoy leader — REAL HARDWARE.
+# Turn/LED/control params are finetuned values from the traffic-lights team.
+# Lane servoing gains come from config/lane_servoing_config.yaml (shared).
+
+control:
+  loop_hz: 24
+
+red_line:
+  red_strip_frac: 0.32
+  red_approach_frac: 0.50
+  red_roi_left: 0.12
+  red_roi_right: 0.90
+  red_pixel_frac: 0.012
+  red_approach_pixel_frac: 0.003
+  red_min_area: 60
+  red_min_width_frac: 0.12
+  red_line_close_y2_ratio: 0.3
+
+turn:
+  stop_hold_s: 2.08
+  preturn_right_s: 0.83
+  preturn_left_s: 0.33
+  preturn_speed: 0.20
+  turn_right_s: 1.04
+  turn_left_s: 2.33
+  turn_right_pwm: [0.60, 0.05]
+  turn_left_pwm: [0.20, 0.50]
+  exit_s: 0.125
+  exit_speed: 0.40
+  red_ignore_s: 4.17
+  approach_slow_factor: 0.80
+  turn_sequence: ['R', 'L', 'S', 'S']
+  turn_cooldown_s: 3.0
+
+led:
+  blink_hz: 5.0

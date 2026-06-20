@@ -1,57 +1,44 @@
 """
-Convoying follower — final project agent.
+Convoying follower — lane-primary architecture.
 
-One Duckiebot follows another. The leader carries the Duckietown circle
-grid (3 rows x 7 dots) on its back; we detect it with cv2.findCirclesGrid,
-steer to keep it centred, and modulate speed to hold a safe distance.
+STEERING is always from the shared LaneServoingAgent (stays in lane).
+The dot grid on the leader's back controls SPEED (span → distance) and
+TURN DETECTION (lateral excursion + row-tilt via PCA). When a turn is
+detected, the follower executes the same open-loop arc as the leader.
 
-Turn detection uses two complementary, calibration-free channels:
-  * lateral excursion  — grid swinging left/right vs a learned baseline
-                         (absorbs each wonky camera's resting offset).
-  * row tilt           — mean angle of the grid's rows vs a learned tilt
-                         baseline (bias-immune to lateral mounting offset;
-                         this is the perspective/orientation channel).
+FSM:
+  LANE_FOLLOW        — lane steering + grid speed modulation + turn detection
+  TURNING            — open-loop arc (same direction/params as leader), blind
+  LANE_FOLLOW_TIMEOUT — grid lost, no recent turn: keep lane-following, then stop
+  STOP               — wheels at 0; resume LANE_FOLLOW if grid reacquired
 
-A turn is declared when a channel exceeds its threshold (raised while the
-follower is itself correcting — the self-stable gate) for a sustained run
-of same-sign frames, with hysteresis on clear. The follower signals the
-direction via LEDs / STATUS for a later preemptive turn.
-
-No AprilTag / sign detection here — the LEADER handles stop signs; the
-follower mimics the leader via the dot grid (stops when the leader stops,
-because span grows past stop_span). No solvePnP / calibration required.
+No AprilTag / sign detection — the LEADER handles stop signs. No solvePnP /
+calibration required. PAUSED stops only the wheels.
 """
 
 import os
+import time
 import threading
 
 import cv2
 import numpy as np
 import yaml
 
+from tasks.visual_lane_servoing.packages.agent import LaneServoingAgent
+
 # Published for the web UI / debugging (the servers read these).
-# DETECTION is a lock-protected dict of the latest detection + control results.
-# The video thread reads it to draw the overlay on the LIVE frame (so the feed
-# never freezes — it always shows fresh camera frames with the overlay drawn on
-# top at detection rate). STATUS is the /status panel payload.
 DETECTION = {}
 _det_lock = threading.Lock()
 STATUS = {}
 
-# Runtime config (mutable, read by the web UI for live tuning).
 CFG = None
 _leader = None
 _turn = None
 _ctrl = None
+_lane_agent = None
 
-# Pause flag — servers set this; the loop holds wheels at zero while paused
-# but still runs detection so you can verify it stationary.
 PAUSED = True
-
-
-# =====================================================================
-# SECTION 1: CONFIG LOADING
-# =====================================================================
+CONFIG_FILE = 'project_config.yaml'
 
 _DEFAULTS = {
     'leader': {
@@ -63,34 +50,44 @@ _DEFAULTS = {
         'max_speed': 0.45, 'chase_speed': 0.30,
         'steer_kp': 0.55, 'steer_kd': 0.30,
         'dist_kp': 2.0, 'accel_rate': 0.05, 'decel_rate': 0.08,
-        'search_turn': 0.10, 'search_after_frames': 24, 'loop_hz': 20,
+        'search_turn': 0.10, 'search_after_frames': 24, 'loop_hz': 24,
         'error_alpha': 0.3, 'd_deadband': 0.01,
     },
     'detection': {
-        'hold_frames': 3,     # keep last pose this many frames on a miss
-        'roi_pad': 30,        # px padding around last bbox for ROI retry
-        'clahe': True,        # CLAHE-gray retry on a miss
+        'hold_frames': 3,
+        'roi_pad': 30,
+        'clahe': True,
     },
     'turn': {
-        'excursion_thr': 0.35,        # |lateral_error - baseline| to start a turn
-        'excursion_thr_strong': 0.55, # required while the follower is self-correcting
-        'tilt_thr': 0.10,             # rad, |tilt - tilt_baseline| to start a turn
-        'tilt_thr_strong': 0.18,      # rad, required while self-correcting
-        'sustain_frames': 4,          # consecutive same-sign frames to declare
-        'clear_thr': 0.12,            # excursion below this to clear a turn
-        'clear_tilt': 0.04,           # tilt below this to clear a turn
-        'baseline_alpha': 0.02,       # EMA rate for lateral/tilt baselines
-        'self_stable_thr': 0.10,      # |steer| EMA above this => follower unstable
-        'self_stable_alpha': 0.15,    # EMA rate for |steer|
-        'sign_invert': False,         # flip L/R label (confirm empirically once)
+        'excursion_thr': 0.35,
+        'excursion_thr_strong': 0.55,
+        'tilt_thr': 0.10,
+        'tilt_thr_strong': 0.18,
+        'sustain_frames': 4,
+        'clear_thr': 0.12,
+        'clear_tilt': 0.04,
+        'baseline_alpha': 0.02,
+        'self_stable_thr': 0.10,
+        'self_stable_alpha': 0.15,
+        'sign_invert': False,
+        # Turn arc params — same finetuned values as the leader
+        'preturn_right_s': 0.83,
+        'preturn_left_s': 0.33,
+        'preturn_speed': 0.20,
+        'turn_right_s': 1.04,
+        'turn_left_s': 2.33,
+        'turn_right_pwm': [0.60, 0.05],
+        'turn_left_pwm': [0.20, 0.50],
+        'exit_s': 0.125,
+        'exit_speed': 0.40,
+        'turn_cooldown_s': 3.0,       # suppress turn detection this long after a turn
+    },
+    'lane_fallback': {
+        'enabled': True,
+        'lane_follow_timeout_s': 5.0,
     },
     'camera': {'matrix': None, 'dist_coeffs': None},
 }
-
-
-# Set by the server before calling main() to select which config file to load.
-# virtual_server sets this to 'project_config_sim.yaml'; real_server leaves it as-is.
-CONFIG_FILE = 'project_config.yaml'
 
 
 def _config_path():
@@ -116,18 +113,7 @@ def load_config():
 
 
 # =====================================================================
-# SECTION 2: LEADER DETECTION  (Duckietown circle grid on the leader's back)
-#   Robust, calibration-free pipeline (each step only runs on a miss):
-#     1. raw grayscale              (primary, known-working)
-#     2. CLAHE grayscale retry      (catches poor/uneven lighting)
-#     3. ROI-crop retry             (less clutter around last bbox, bridges
-#                                    motion blur / partial occlusion)
-#     4. temporal hold of last pose (bridges 1-2 frame flicker)
-#   Returns (found, lateral_error, span, centers, method, quality)
-#     lateral_error : horizontal offset in [-1,1] (-1 leader left, +1 right)
-#     span          : grid width / frame width  (bigger => closer)
-#     method        : 'raw' | 'clahe' | 'roi' | 'held' | ''
-#     quality       : 1.0 fresh, decaying while held
+# SECTION 2: LEADER DETECTION  (dot grid — unchanged from follower-v2)
 # =====================================================================
 
 class LeaderDetector:
@@ -142,7 +128,7 @@ class LeaderDetector:
         self.roi_pad = int(d.get('roi_pad', 30))
         self.use_clahe = bool(d.get('clahe', True))
         self._clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        self._last_centers = None      # for temporal hold + ROI seeding
+        self._last_centers = None
         self._last_bbox = None
         self._hold_left = 0
 
@@ -150,9 +136,9 @@ class LeaderDetector:
     def _make_blob_detector(min_area):
         p = cv2.SimpleBlobDetector_Params()
         p.filterByColor = True
-        p.blobColor = 0                  # dark dots on white
+        p.blobColor = 0
         p.filterByArea = True
-        p.minArea = min_area             # small => detect distant (tiny) dots
+        p.minArea = min_area
         p.maxArea = 8000.0
         p.filterByCircularity = True
         p.minCircularity = 0.6
@@ -199,7 +185,6 @@ class LeaderDetector:
             self._hold_left = self.hold_frames
             quality = 1.0
         elif self._last_centers is not None and self._hold_left > 0:
-            # brief miss -> reuse last pose a few frames (decaying confidence)
             pts = self._last_centers
             self._hold_left -= 1
             quality = self._hold_left / float(max(1, self.hold_frames))
@@ -216,15 +201,7 @@ class LeaderDetector:
 
 
 # =====================================================================
-# SECTION 3: TURN DETECTION
-#   Two calibration-free channels:
-#     lateral excursion : lateral_error - lateral_baseline
-#     row tilt          : mean row angle - tilt_baseline
-#   Baselines are EMAs updated only while tracking straight & not turning,
-#   so each wonky camera's resting lateral offset / roll is absorbed. The
-#   self-stable gate raises thresholds while the follower is actively
-#   correcting its own heading, so the follower's wobble is not misread as
-#   a leader turn.
+# SECTION 3: TURN DETECTION  (unchanged from follower-v2)
 # =====================================================================
 
 class TurnDetector:
@@ -249,28 +226,21 @@ class TurnDetector:
         self._sustain_sign = 0
         self.turn_dir = 'none'
         self.turn_active = False
-        self.excursion = 0.0     # lateral_error - lateral_baseline
-        self.tilt = 0.0          # row_tilt - tilt_baseline
+        self.excursion = 0.0
+        self.tilt = 0.0
 
     @staticmethod
     def _row_tilt(pts, rows, cols):
-        """Orientation (rad) of the grid's long axis via PCA. Ordering- and
-        overlap-agnostic: per-row y-grouping breaks when tilted rows overlap
-        in y (this grid is wide and short, so they do at small rotations).
-        The long axis (7-dot direction) is PC1; we force it to point rightward
-        so the sign is a stable tilt convention (not the arbitrary eigenvector
-        sign). Angle == the grid's in-image yaw."""
         p = np.asarray(pts, dtype=np.float64)
         p = p - p.mean(axis=0)
         cov = np.cov(p[:, 0], p[:, 1])
-        _, v = np.linalg.eigh(cov)            # v[:, -1] = largest-variance axis
+        _, v = np.linalg.eigh(cov)
         axis = v[:, -1]
         if axis[0] < 0:
-            axis = -axis                      # force pointing right
+            axis = -axis
         return float(np.arctan2(axis[1], axis[0]))
 
     def update(self, found, lateral_error, pts, steer, rows, cols):
-        # how much the follower is currently correcting its own heading
         self._self_stable_ema = ((1 - self.self_stable_alpha) * self._self_stable_ema
                                  + self.self_stable_alpha * abs(steer))
         unstable = self._self_stable_ema > self.self_stable_thr
@@ -279,7 +249,6 @@ class TurnDetector:
             raw_tilt = self._row_tilt(pts, rows, cols) if pts is not None else 0.0
             self.tilt = raw_tilt - self.tilt_baseline
             self.excursion = lateral_error - self.lateral_baseline
-            # learn baselines only while steadily tracking straight, no turn
             if not unstable and not self.turn_active:
                 a = self.baseline_alpha
                 self.lateral_baseline = (1 - a) * self.lateral_baseline + a * lateral_error
@@ -291,8 +260,6 @@ class TurnDetector:
         e_thr = self.excursion_thr_strong if unstable else self.excursion_thr
         t_thr = self.tilt_thr_strong if unstable else self.tilt_thr
 
-        # candidate direction: either channel over threshold; if both over,
-        # they must agree in sign, else it's noise -> no candidate.
         es = 1 if self.excursion > e_thr else (-1 if self.excursion < -e_thr else 0)
         ts = 1 if self.tilt > t_thr else (-1 if self.tilt < -t_thr else 0)
         if es != 0 and ts != 0:
@@ -324,95 +291,66 @@ class TurnDetector:
 
         return self.turn_dir, self.turn_active
 
+    def reset(self):
+        """Full reset after a completed turn — clears state AND baselines so
+        the detector doesn't immediately re-fire on the stale excursion/tilt
+        values (which would cause an infinite turn loop)."""
+        self.turn_active = False
+        self.turn_dir = 'none'
+        self._sustain = 0
+        self._sustain_sign = 0
+        self.excursion = 0.0
+        self.tilt = 0.0
+        self.lateral_baseline = 0.0
+        self.tilt_baseline = 0.0
+        self._self_stable_ema = 0.0
+
 
 # =====================================================================
-# SECTION 4: CONTROL  (PD steering + distance speed control + smooth ramp)
-#   - steering : PD on lateral_error -> differential turn
-#   - speed    : pure proportional on span error around target_span. At the
-#                target distance speed is 0 (it holds position); when too
-#                close (span >= stop_span) speed is clamped to 0 (this is
-#                how the follower stops when the leader stops).
-#   - ramp     : current speed eases toward target so starts/stops are soft
+# SECTION 4: SPEED CONTROL  (distance from grid span — steering is lane-based)
 # =====================================================================
 
 class Controller:
     def __init__(self, cfg):
         c = cfg['control']
         self.max_speed = float(c['max_speed'])
-        self.chase_speed = float(c['chase_speed'])    # creep while reacquiring a far leader
-        self.steer_kp = float(c['steer_kp'])
-        self.steer_kd = float(c['steer_kd'])
+        self.chase_speed = float(c['chase_speed'])
         self.dist_kp = float(c['dist_kp'])
         self.accel = float(c['accel_rate'])
         self.decel = float(c['decel_rate'])
-        self.search_turn = float(c['search_turn'])
-        self.search_after = int(c['search_after_frames'])
         self.target_span = float(cfg['leader']['target_span'])
         self.stop_span = float(cfg['leader']['stop_span'])
         self.deadband = float(cfg['leader']['span_deadband'])
-
-        # Low-pass smoothing on the raw detection signals. Without this, a few-px
-        # blob-centre jitter (or a raw->clahe method switch shifting mean_x a bit)
-        # gets differentiated by the D-term into an alternating steer kick that
-        # rocks the bot and then waterfalls (wobble -> noisier detection -> bigger
-        # kick). error_alpha is the weight of the NEW sample (0.3 = fairly smooth,
-        # like the leader's lane agent). A D-term deadband stops sub-threshold
-        # noise from being differentiated at all.
         self.error_alpha = float(c.get('error_alpha', 0.3))
-        self.d_deadband = float(c.get('d_deadband', 0.01))
-
-        self._cur_v = 0.0       # ramped forward speed
-        self._prev_e = 0.0      # previous (filtered) lateral error (for D term)
-        self._filt_e = 0.0      # low-passed lateral_error
-        self._filt_span = 0.0   # low-passed span
-
-    def steering(self, lateral_error):
-        # low-pass the error so detection jitter doesn't kick the wheels
-        self._filt_e = (1.0 - self.error_alpha) * self._filt_e \
-            + self.error_alpha * lateral_error
-        e = self._filt_e
-        d = e - self._prev_e
-        self._prev_e = e
-        # D-term deadband: ignore tiny deltas that are just measurement noise
-        if abs(d) < self.d_deadband:
-            d = 0.0
-        return self.steer_kp * e + self.steer_kd * d
+        self._filt_span = 0.0
+        self._cur_v = 0.0
 
     def filtered_span(self, span):
-        """Low-pass the span so distance speed doesn't twitch on detection jitter."""
         self._filt_span = (1.0 - self.error_alpha) * self._filt_span \
             + self.error_alpha * span
         return self._filt_span
 
     def distance_speed(self, span, speed_cap):
-        """Forward speed to hold the target distance (before ramping)."""
         if span >= self.stop_span:
-            return 0.0                          # too close -> hold still, don't reverse
-        err = self.target_span - span           # >0 = leader too far -> go forward
+            return 0.0
+        err = self.target_span - span
         if abs(err) < self.deadband:
-            return 0.0                          # at the right distance -> hold still
+            return 0.0
         return float(np.clip(self.dist_kp * err, 0.0, speed_cap))
 
     def ramp(self, target_v):
-        """Ease current speed toward target_v (smooth accel/decel)."""
         if target_v > self._cur_v:
             self._cur_v = min(target_v, self._cur_v + self.accel)
         else:
             self._cur_v = max(target_v, self._cur_v - self.decel)
         return self._cur_v
 
-    def reset_steer(self):
-        self._prev_e = 0.0
-        self._filt_e = 0.0
+    def reset(self):
         self._filt_span = 0.0
-
-    @property
-    def current_speed(self):
-        return self._cur_v
+        self._cur_v = 0.0
 
 
 def _sync_cfg():
-    """Re-read config into the live objects (live tuning from the dashboard)."""
     global _ctrl, _turn, _leader, CFG
     if CFG is None:
         return
@@ -420,18 +358,13 @@ def _sync_cfg():
     if _ctrl is not None:
         _ctrl.max_speed = float(c['max_speed'])
         _ctrl.chase_speed = float(c['chase_speed'])
-        _ctrl.steer_kp = float(c['steer_kp'])
-        _ctrl.steer_kd = float(c['steer_kd'])
         _ctrl.dist_kp = float(c['dist_kp'])
         _ctrl.accel = float(c['accel_rate'])
         _ctrl.decel = float(c['decel_rate'])
-        _ctrl.search_turn = float(c['search_turn'])
-        _ctrl.search_after = int(c['search_after_frames'])
         _ctrl.target_span = float(CFG['leader']['target_span'])
         _ctrl.stop_span = float(CFG['leader']['stop_span'])
         _ctrl.deadband = float(CFG['leader']['span_deadband'])
         _ctrl.error_alpha = float(c.get('error_alpha', _ctrl.error_alpha))
-        _ctrl.d_deadband = float(c.get('d_deadband', _ctrl.d_deadband))
     t = CFG.get('turn', {})
     if _turn is not None:
         _turn.excursion_thr = float(t.get('excursion_thr', _turn.excursion_thr))
@@ -454,25 +387,23 @@ def _sync_cfg():
 
 # =====================================================================
 # SECTION 5: LED SIGNALLING
-#   Corner LEDs communicate state + the detected leader turn direction.
-#   Guarded with `if leds:` because the LED hardware may fail to init.
-#   Indices: 0=front-left, 2=front-right, 3=back-left, 4=back-right.
 # =====================================================================
 
 _COLORS = {
-    'FOLLOW': [0.0, 1.0, 0.0],   # green
-    'HOLD':   [1.0, 0.7, 0.0],   # amber — holding distance / leader stopped
-    'SEARCH': [0.0, 0.3, 1.0],   # blue
+    'LANE_FOLLOW':         [0.0, 1.0, 0.0],   # green
+    'TURNING':             [0.3, 0.3, 1.0],   # blue
+    'LANE_FOLLOW_TIMEOUT': [1.0, 0.7, 0.0],   # amber
+    'STOP':                [1.0, 0.0, 0.0],   # red
 }
 
 
-def set_leds(leds, state, turn_dir='none', turn_active=False):
+def set_leds(leds, state, turn_dir='none'):
     if not leds:
         return
     base = _COLORS.get(state, [0.0, 0.0, 0.0])
-    leds.set_rgb(3, base)
-    leds.set_rgb(4, base)
-    if turn_active and turn_dir in ('L', 'R'):
+    for i in (3, 4):
+        leds.set_rgb(i, base)
+    if state == 'TURNING' and turn_dir in ('L', 'R'):
         amber = [1.0, 0.6, 0.0]
         if turn_dir == 'R':
             leds.set_rgb(2, amber); leds.set_rgb(0, base)
@@ -484,15 +415,13 @@ def set_leds(leds, state, turn_dir='none', turn_active=False):
 
 # =====================================================================
 # SECTION 6: DEBUG OVERLAY + STATE MACHINE + main()
-#   States: SEARCH (no leader) / FOLLOW / HOLD (leader too close / stopped).
-#   SEARCH currently just stops (future: follow lanes to reacquire).
+#   LANE_FOLLOW  — lane steering + grid speed + turn detection
+#   TURNING      — open-loop arc (blind, same params as leader)
+#   LANE_FOLLOW_TIMEOUT — grid lost, keep lane-following, then stop
+#   STOP         — wheels at 0
 # =====================================================================
 
 def _annotate(bgr, det):
-    """Rich debug overlay drawn by the VIDEO THREAD on the live frame.
-    `det` is the DETECTION dict published by the agent (lock-protected).
-    Draws: grid bbox + dots, baseline line, turn arrow, excursion bar,
-    state + span + excursion + tilt + detection method."""
     if not det:
         return bgr
     img = bgr.copy()
@@ -508,21 +437,18 @@ def _annotate(bgr, det):
         col = (0, 255, 0) if method != 'held' else (0, 180, 255)
         for (x, y) in c:
             cv2.circle(img, (x, y), 3, col, -1)
-        # lateral baseline as a magenta vertical line (the bot's "rest" centre)
         bx = int(w / 2.0 + det.get('lateral_baseline', 0.0) * (w / 2.0))
         cv2.line(img, (bx, 0), (bx, h), (255, 0, 255), 1)
         cv2.putText(img, 'base', (bx + 2, 14),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
 
-    # big turn arrow, top-center
-    if det.get('turn_active') and det.get('turn_dir') in ('L', 'R'):
+    if det.get('turn_dir') in ('L', 'R'):
         arrow = '<<< LEFT' if det['turn_dir'] == 'L' else 'RIGHT >>>'
         cv2.putText(img, arrow, (w // 2 - 70, 26),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 5)
         cv2.putText(img, arrow, (w // 2 - 70, 26),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 165, 255), 2)
 
-    # excursion bar (bottom-center): yellow tick = how far off baseline
     bar_w = int(w * 0.4)
     bar_x = w // 2 - bar_w // 2
     bar_y = h - 22
@@ -537,28 +463,38 @@ def _annotate(bgr, det):
     exc = det.get('excursion', 0.0)
     tilt = det.get('tilt', 0.0)
     quality = det.get('quality', 0.0)
-    txt = (f'{state}  span={span:.2f}  e={lat:+.2f}  '
-           f'exc={exc:+.2f}  tilt={tilt:+.2f}  '
+    speed_scale = det.get('speed_scale', 1.0)
+    lane_det = det.get('lane_detected', False)
+    txt = (f'{state}  span={span:.2f}  scale={speed_scale:.2f}  '
+           f'lane={lane_det}  e={lat:+.2f}  exc={exc:+.2f}  tilt={tilt:+.2f}  '
            f'{method or "-"}  q={quality:.1f}')
-    cv2.putText(img, txt, (10, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 4)
-    cv2.putText(img, txt, (10, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    cv2.putText(img, txt, (10, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 4)
+    cv2.putText(img, txt, (10, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
     return img
 
 
 def main(camera, wheels, leds, stop_event):
-    global STATUS, CFG, _leader, _turn, _ctrl
+    global STATUS, CFG, _leader, _turn, _ctrl, _lane_agent
 
     CFG = load_config()
     _leader = LeaderDetector(CFG)
     _turn = TurnDetector(CFG)
     _ctrl = Controller(CFG)
+    _lane_agent = LaneServoingAgent()
 
     dt = 1.0 / float(CFG['control']['loop_hz'])
+    t = CFG.get('turn', {})
+    lf = CFG.get('lane_fallback', {})
+    lane_follow_timeout_s = float(lf.get('lane_follow_timeout_s', 5.0))
 
-    lost_count = 0
-    last_e = 0.0               # last lateral error while the leader was seen
-    last_span = 0.0            # last span while seen (tells us WHY we lost it)
-    last_turn = 0.0            # last steering command while following
+    # FSM state
+    state = 'LANE_FOLLOW'
+    turn_state_start = 0.0
+    turn_arc_dir = 'none'
+    turn_phase = ''        # 'preturn' | 'turn' | 'exit'
+    lost_since = None      # monotonic time when grid was first lost
+    turn_cooldown_until = 0.0  # suppress turn detection until this time
+    turn_cooldown_s = float(t.get('turn_cooldown_s', 3.0))
 
     try:
         while not stop_event.is_set():
@@ -568,78 +504,142 @@ def main(camera, wheels, leds, stop_event):
                 stop_event.wait(0.02)
                 continue
 
+            now = time.monotonic()
+
+            # --- lane following (always runs for steering) ---
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            lane_l, lane_r = _lane_agent.compute_commands(rgb)
+            lane_info = _lane_agent.last_debug_info
+            lane_detected = bool(lane_info.get('lane_detected', False))
+
+            # --- grid detection (for speed + turn detection) ---
             found, lateral_error, span, centers, method, quality = _leader.detect(frame)
 
-            speed_cap = _ctrl.max_speed
+            # --- FSM ---
+            pwm_l, pwm_r = 0.0, 0.0
+            speed_scale = 1.0
+            tdir, tactive = 'none', False
 
-            # --- pick state + commands (runs identically paused or active) ---
-            steer = 0.0
-            if found:
-                lost_count = 0
-                last_e, last_span = lateral_error, span
-                steer = _ctrl.steering(lateral_error)
-                last_turn = steer
-                # distance control on the FILTERED span (jitter-resistant)
-                fspan = _ctrl.filtered_span(span)
-                target_v = _ctrl.distance_speed(fspan, speed_cap)
-                state = 'HOLD' if fspan >= _ctrl.stop_span else 'FOLLOW'
-            else:
-                lost_count += 1
-                if lost_count < _ctrl.search_after:
-                    # brief loss: react to why we lost it (never spin)
-                    if last_span >= _ctrl.target_span:
-                        target_v, steer, state = 0.0, 0.0, 'HOLD'
+            if state == 'LANE_FOLLOW':
+                if found:
+                    lost_since = None
+                    fspan = _ctrl.filtered_span(span)
+
+                    # speed modulation from grid distance
+                    if fspan >= _ctrl.stop_span:
+                        speed_scale = 0.0        # leader stopped / too close
                     else:
-                        target_v, steer, state = _ctrl.chase_speed, last_turn * 0.5, 'FOLLOW'
+                        target_speed = _ctrl.distance_speed(fspan, _ctrl.max_speed)
+                        lane_base = max(_lane_agent.base_speed, 0.01)
+                        speed_scale = float(np.clip(target_speed / lane_base, 0.0, 2.0))
+
+                    pwm_l = lane_l * speed_scale
+                    pwm_r = lane_r * speed_scale
+
+                    # turn detection (suppressed during cooldown after a turn)
+                    if now >= turn_cooldown_until:
+                        tdir, tactive = _turn.update(
+                            found, lateral_error, centers,
+                            abs(lane_l - lane_r),  # steer magnitude from lane agent
+                            _leader.rows, _leader.cols)
+                    else:
+                        tdir, tactive = 'none', False
+
+                    if tactive and tdir in ('L', 'R'):
+                        state = 'TURNING'
+                        turn_arc_dir = tdir
+                        turn_phase = 'preturn'
+                        turn_state_start = now
                 else:
-                    # long loss: stop for now (future: follow lanes to reacquire)
-                    target_v, steer, state = 0.0, 0.0, 'SEARCH'
-                    _ctrl.reset_steer()
+                    # grid lost — keep lane-following at full speed
+                    speed_scale = 1.0
+                    pwm_l = lane_l
+                    pwm_r = lane_r
+                    if lost_since is None:
+                        lost_since = now
+                    if now - lost_since > lane_follow_timeout_s:
+                        state = 'STOP'
+                        _ctrl.reset()
 
-            # turn detection runs every frame (held frames keep the last pose)
-            tdir, tactive = _turn.update(
-                found, lateral_error, centers, steer,
-                _leader.rows, _leader.cols)
+            elif state == 'TURNING':
+                # blind open-loop arc (same params as leader)
+                if turn_phase == 'preturn':
+                    ps = float(t.get('preturn_speed', 0.20))
+                    pwm_l = pwm_r = ps
+                    preturn_s = (float(t.get('preturn_right_s', 0.83)) if turn_arc_dir == 'R'
+                                 else float(t.get('preturn_left_s', 0.33)))
+                    if now - turn_state_start >= preturn_s:
+                        turn_phase = 'turn'
+                        turn_state_start = now
 
-            # --- ramp speed, mix into wheels ---
-            # PAUSE only stops the wheels — detection, control decision, LEDs,
-            # overlay and status all keep running so you can verify behaviour
-            # stationary. The dashboard red dot is the sole pause indicator.
-            v = _ctrl.ramp(target_v)
+                elif turn_phase == 'turn':
+                    if turn_arc_dir == 'R':
+                        pwm_l, pwm_r = t.get('turn_right_pwm', [0.60, 0.05])
+                        turn_s = float(t.get('turn_right_s', 1.04))
+                    else:
+                        pwm_l, pwm_r = t.get('turn_left_pwm', [0.20, 0.50])
+                        turn_s = float(t.get('turn_left_s', 2.33))
+                    if now - turn_state_start >= turn_s:
+                        turn_phase = 'exit'
+                        turn_state_start = now
+
+                elif turn_phase == 'exit':
+                    es = float(t.get('exit_speed', 0.40))
+                    pwm_l = pwm_r = es
+                    if now - turn_state_start >= float(t.get('exit_s', 0.125)):
+                        state = 'LANE_FOLLOW'
+                        _turn.reset()
+                        _ctrl.reset()
+                        lost_since = None
+                        turn_cooldown_until = now + turn_cooldown_s
+
+                tdir = turn_arc_dir
+                tactive = True
+
+            elif state == 'STOP':
+                pwm_l = pwm_r = 0.0
+                if found:
+                    state = 'LANE_FOLLOW'
+                    lost_since = None
+                    _ctrl.reset()
+
+            # --- wheels (paused = movement only) ---
             if PAUSED:
                 wheels.set_wheels_speed(0.0, 0.0)
             else:
-                left = float(np.clip(v + steer, -1.0, 1.0))
-                right = float(np.clip(v - steer, -1.0, 1.0))
-                wheels.set_wheels_speed(left, right)
+                wheels.set_wheels_speed(float(pwm_l), float(pwm_r))
 
-            # --- signal + publish results (identical paused or active) ---
-            set_leds(leds, state, tdir, tactive)
+            # --- LEDs ---
+            set_leds(leds, state, turn_arc_dir if state == 'TURNING' else tdir)
+
+            # --- publish results ---
             det = {
                 'found': found, 'centers': centers, 'method': method,
                 'quality': quality, 'span': span,
                 'lateral_error': lateral_error, 'state': state,
-                'steer': steer, 'turn_dir': tdir, 'turn_active': tactive,
+                'speed_scale': speed_scale,
+                'turn_dir': tdir, 'turn_active': tactive,
                 'excursion': _turn.excursion, 'tilt': _turn.tilt,
                 'lateral_baseline': _turn.lateral_baseline,
+                'lane_detected': lane_detected,
             }
             with _det_lock:
                 DETECTION.update(det)
             STATUS = {
                 'state': state, 'found': found, 'span': round(span, 3),
-                'lateral_error': round(lateral_error, 3), 'steer': round(steer, 3),
-                'speed': round(v, 3),
+                'lateral_error': round(lateral_error, 3),
+                'speed_scale': round(speed_scale, 3),
                 'turn_dir': tdir, 'turn_active': tactive,
                 'baseline': round(_turn.lateral_baseline, 3),
                 'excursion': round(_turn.excursion, 3),
                 'tilt': round(_turn.tilt, 3),
                 'detection_method': method, 'quality': round(quality, 2),
-                'lane_fallback': False,
+                'lane_detected': lane_detected,
+                'lane_fallback': state in ('LANE_FOLLOW_TIMEOUT',),
             }
 
             stop_event.wait(dt)
     finally:
-        # Contract: always stop the motors and lights on exit.
         wheels.set_wheels_speed(0.0, 0.0)
         if leds:
             leds.all_off()
