@@ -16,14 +16,14 @@ signs:
   red_hsv_low2: [160, 100, 100]
   red_hsv_high2: [179, 255, 255]
   lane_margin_px: 12
-  red_line_close: 0.070
+  red_line_close: 0.06
   red_close_strip_frac: 0.045
   red_confirm_frames: 4
   red_clear_frames: 20
   red_center_frac: 0.20
   red_min_band_rows: 0.35
   red_near_over_far: 1.15
-  require_lane_for_red: true
+  require_lane_for_red: false
   stop_tag_px: 55
   slow_tag_px: 38
   min_tag_px: 38
@@ -36,15 +36,18 @@ intersection:
   turns: [left, right, straight]
   stop_hold_s: 1.0
   turn_angle_deg: 90.0
-  turn_timeout_s: 4.0
+  turn_timeout_s: 12.0
+  tolerance_deg: 5.0
+  converge_samples: 8
 
 maneuver:
-  post_stop_frames: 25
+  cross_distance_m: 0.12
+  cross_timeout_s: 8.0
   post_stop_speed: 0.20
-  preturn_left_frames: 18
-  preturn_right_frames: 18
-  preturn_straight_frames: 18
-  preturn_speed: 0.22
+  preturn_left_frames: 22
+  preturn_right_frames: 22
+  preturn_straight_frames: 20
+  preturn_speed: 0.18
 
 control:
   loop_hz: 20

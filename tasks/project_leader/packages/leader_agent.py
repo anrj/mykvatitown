@@ -79,7 +79,8 @@ _DEFAULTS = {
         'intersection_exit_speed': 0.22,
     },
     'maneuver': {
-        'post_stop_frames': 25,
+        'cross_distance_m': 0.12,
+        'cross_timeout_s': 8.0,
         'post_stop_speed': 0.20,
         'preturn_left_frames': 18,
         'preturn_right_frames': 18,
@@ -222,13 +223,11 @@ def main(camera, wheels, leds, stop_event):
     red_clear_need = int(CFG.get('signs', {}).get('red_clear_frames', 20))
     exit_ix_s = float(control.get('intersection_exit_s', 2.5))
     exit_ix_speed = float(control.get('intersection_exit_speed', 0.22))
-    post_stop_frames = int(maneuver.get('post_stop_frames', 25))
     post_stop_speed = float(maneuver.get('post_stop_speed', 0.20))
     preturn_left_frames = int(maneuver.get('preturn_left_frames', 18))
     preturn_right_frames = int(maneuver.get('preturn_right_frames', 18))
     preturn_straight_frames = int(maneuver.get('preturn_straight_frames', 18))
     preturn_speed = float(maneuver.get('preturn_speed', 0.22))
-    post_stop_count = 0
     preturn_count = 0
 
     try:
@@ -246,10 +245,7 @@ def main(camera, wheels, leds, stop_event):
             bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR) if frame.shape[-1] == 3 else frame
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
-            turn_dir = (
-                intersection.pending_direction()
-                if intersection.turn_active() else 'none'
-            )
+            turn_dir = intersection.pending_direction()
             left, right = 0.0, 0.0
             in_exit = mode == MODE_EXIT or now < exit_ix_until
 
@@ -265,14 +261,15 @@ def main(camera, wheels, leds, stop_event):
             elif mode == MODE_STOP:
                 left, right = 0.0, 0.0
                 if intersection.stop_complete(now):
-                    post_stop_count = 0
+                    intersection.begin_cross_segment()
+                    preturn_count = 0
                     mode = MODE_CROSS
                     lane.reset_steering_state()
             elif mode == MODE_CROSS:
                 left, right = lane.compute_commands(rgb)
                 lane_info = dict(lane.last_debug_info)
-                post_stop_count += 1
-                if post_stop_count >= post_stop_frames:
+                if intersection.cross_segment_complete(now):
+                    intersection.end_cross_segment()
                     preturn_count = 0
                     mode = MODE_PRE_TURN
                     lane.reset_steering_state()
@@ -381,6 +378,8 @@ def main(camera, wheels, leds, stop_event):
                 wheels.set_wheels_speed(left * speed_mult, right * speed_mult)
             else:
                 wheels.set_wheels_speed(0.0, 0.0)
+
+            intersection.record_motion(wheels, dt)
             _set_leds(leds, mode)
 
             DEBUG_FRAME = _visualize(
@@ -404,8 +403,10 @@ def main(camera, wheels, leds, stop_event):
                 'red_far': round(red_far_frac, 3),
                 'red_consumed': red_consumed,
                 'exit_ix': in_exit,
-                'post_stop_count': post_stop_count,
-                'post_stop_need': post_stop_frames,
+                'cross_distance_m': intersection.cross_distance_m,
+                'cross_traveled_m': round(intersection.segment_distance(), 3),
+                'heading_deg': round(intersection.odometry.theta_deg, 1),
+                'turn_error_deg': round(intersection.pid_error_deg, 1),
                 'preturn_count': preturn_count,
                 'preturn_need': preturn_need,
                 'lane_detected': bool(lane_info.get('lane_detected')),

@@ -1,19 +1,11 @@
 # Simulation overrides for the convoy leader.
-lane_stop:
-  line_speed_mult: 0.30
-
-maneuver:
-  post_stop_frames: 25
-  post_stop_speed: 0.20
-  preturn_left_frames: 18
-  preturn_right_frames: 18
-  preturn_straight_frames: 18
-  preturn_speed: 0.22
-
 control:
   startup_grace_s: 1.0
   intersection_exit_s: 3.0
   intersection_exit_speed: 0.20
+
+maneuver:
+  cross_distance_m: 0.10
 
 signs:
   red_line_close: 0.075
