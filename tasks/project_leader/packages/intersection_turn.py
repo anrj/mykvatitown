@@ -23,6 +23,7 @@ _MODCON_CONFIG = os.path.normpath(os.path.join(
 _TURN_ORDER = ('left', 'right', 'straight')
 _TURN_DEADBAND_RAD = 0.035  # ~2°, matches modcon virtual_server
 _SIM_PWM_TO_TICKS_PER_SEC = 676.0  # modcon sim calibration
+_REAL_PWM_TO_TICKS_PER_SEC = 135.0  # ~0.2 m/s max on real Duckiebot
 
 
 def _norm_turn(name: str) -> str:
@@ -76,8 +77,17 @@ class LeaderOdometry:
         self._prev_ticks_right = 0
         self._last_update = time.monotonic()
 
-    def _estimate_ticks_from_pwm(self, left_pwm: float, right_pwm: float, dt: float) -> None:
-        k = _SIM_PWM_TO_TICKS_PER_SEC
+    def _estimate_ticks_from_pwm(self, left_pwm: float, right_pwm: float, dt: float,
+                                 wheels: Any = None) -> None:
+        if getattr(wheels, 'encoders', None) is not None:
+            rate = None
+        elif hasattr(wheels, 'reset_game'):
+            rate = _SIM_PWM_TO_TICKS_PER_SEC
+        else:
+            rate = _REAL_PWM_TO_TICKS_PER_SEC
+        if rate is None:
+            return
+        k = rate
         dl = int(k * abs(left_pwm) * dt)
         dr = int(k * abs(right_pwm) * dt)
         if left_pwm < 0:
@@ -94,10 +104,14 @@ class LeaderOdometry:
             self.ticks_left = int(encoders.left.ticks)
             self.ticks_right = int(encoders.right.ticks)
         else:
+            if not getattr(self, '_pwm_odom_warned', False):
+                print('[LeaderOdometry] No wheel encoders — using PWM distance estimate')
+                self._pwm_odom_warned = True
             self._estimate_ticks_from_pwm(
                 float(getattr(wheels, 'left_pwm', 0.0)),
                 float(getattr(wheels, 'right_pwm', 0.0)),
                 dt,
+                wheels,
             )
 
         dphi_left, self._prev_ticks_left = delta_phi(

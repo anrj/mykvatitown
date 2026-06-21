@@ -338,10 +338,23 @@ def package_task(task_name):
     task_models_dir = os.path.join(PROJECT_ROOT, 'tasks', task_name, 'models')
     task_server_dir = os.path.join(PROJECT_ROOT, 'servers', task_name)
 
+    # Tasks that import code from other homework packages must bundle them.
+    _EXTRA_PACKAGES = {
+        'project_leader': [
+            ('tasks/modcon/packages', 'tasks/modcon/packages'),
+            ('tasks/visual_lane_servoing/packages', 'tasks/visual_lane_servoing/packages'),
+        ],
+    }
+
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode='w:gz') as tar:
         print(f"   Adding packages: tasks/{task_name}/packages/")
         tar.add(task_packages_dir, arcname=f'tasks/{task_name}/packages', filter=no_pycache)
+        for src_rel, arcname in _EXTRA_PACKAGES.get(task_name, []):
+            src_abs = os.path.join(PROJECT_ROOT, src_rel)
+            if os.path.isdir(src_abs):
+                print(f"   Adding dependency: {src_rel}")
+                tar.add(src_abs, arcname=arcname, filter=no_pycache)
         if os.path.exists(config_dir):
             print(f"   Adding configs: config/")
             tar.add(config_dir, arcname='config', filter=no_pycache)

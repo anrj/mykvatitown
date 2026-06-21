@@ -1,3 +1,7 @@
+# Convoy leader — REAL HARDWARE (Duckiebot on the course).
+# Deploy with: python launch.py --run --bot <hostname> --task project_leader
+# Tune lane PID / HSV on the dashboard at http://<bot-ip>:5000
+
 lane_stop:
   stop_trigger_line: left
   at_line_follow_line: right

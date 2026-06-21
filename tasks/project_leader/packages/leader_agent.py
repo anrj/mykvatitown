@@ -241,10 +241,20 @@ def main(camera, wheels, leds, stop_event):
                 stop_event.wait(0.02)
                 continue
 
-            now = time.monotonic()
-            bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR) if frame.shape[-1] == 3 else frame
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            # Godot camera returns RGB; Jetson CameraDriver returns BGR.
+            if hasattr(camera, 'read_rgb'):
+                ok_rgb, rgb_frame = camera.read_rgb()
+                if ok_rgb and rgb_frame is not None:
+                    rgb = rgb_frame
+                    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                else:
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    bgr = frame
+            else:
+                bgr = frame
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
+            now = time.monotonic()
             turn_dir = intersection.pending_direction()
             left, right = 0.0, 0.0
             in_exit = mode == MODE_EXIT or now < exit_ix_until
