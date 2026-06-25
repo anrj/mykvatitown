@@ -9,6 +9,18 @@ from tasks.project.project_leader.fsm import (
 )
 from tasks.project.project_leader.perception import LeadPerception
 
+
+def _smooth_wheel_speed(target_left, target_right, prev_left, prev_right,
+                        max_delta=0.08):
+    def step(target, prev):
+        delta = target - prev
+        if delta > max_delta:
+            return prev + max_delta
+        if delta < -max_delta:
+            return prev - max_delta
+        return target
+    return step(target_left, prev_left), step(target_right, prev_right)
+
 _CONFIG_FILE = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "config", "project_lead_config.yaml")
 )
@@ -38,6 +50,8 @@ def main(camera, wheels, leds, stop_event,
     frame_count = 0
     fps = 0.0
     in_maneuver = False
+    prev_left = 0.0
+    prev_right = 0.0
     cam_fail = 0
 
     try:
@@ -92,6 +106,8 @@ def main(camera, wheels, leds, stop_event,
                 perception.reset_lane()
 
             left, right = motors_from_decision(decision)
+            left, right = _smooth_wheel_speed(left, right, prev_left, prev_right)
+            prev_left, prev_right = left, right
 
             # Reset encoders at maneuver entry so yaw integrates from zero.
             is_man = decision.state_name in _MANEUVER_STATES

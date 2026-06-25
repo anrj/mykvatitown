@@ -2,15 +2,17 @@ apriltag_family: tag36h11
 apriltag_stop_ids: [0]
 apriltag_slow_ids: [1]
 
-cruise_speed: 0.3
+cruise_speed: 0.25
 route: [right, straight, stop]
 
-turn_base_speed: 0.28
-turn_steer: 0.18
-min_turn_s: 0.9
-right_turn_s_factor: 1.0
-left_turn_s_factor: 1.0
-turn_time_scale: 1.05
+cross_base_speed: 0.22
+turn_base_speed: 0.22
+turn_steer: 0.16
+min_turn_s: 1.0
+right_turn_s_factor: 1.05
+left_turn_s_factor: 1.05
+turn_finish_speed_factor: 0.55
+turn_time_scale: 1.1
 wheel_baseline_m: 0.1
 right_yaw_target_rad: 1.57
 left_yaw_target_rad: 1.57

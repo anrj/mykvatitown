@@ -103,6 +103,7 @@ class LeadFSM:
         self.cross_distance_m = float(cfg.get("cross_distance_m", 0.35))
         self.heading_kp       = float(cfg.get("maneuver_heading_kp", 0.6))
         self.turn_kp          = float(cfg.get("turn_kp", 0.8))
+        self.turn_finish_speed_factor = float(cfg.get("turn_finish_speed_factor", 0.55))
         self.cross_dist_tol_m = float(cfg.get("cross_dist_tol_m", 0.03))
         self.turn_yaw_tol_rad = float(cfg.get("turn_yaw_tol_rad", 0.08))
 
@@ -319,12 +320,16 @@ class LeadFSM:
             # Lane convention: +steer turns LEFT, -steer turns RIGHT.
             sign = 1.0 if step == "left" else -1.0
             base, steer_cap, _ = self._turn_params(step)
-            steer_floor = 0.08
             if have_odo and yaw_target > 0:
                 yaw_err = yaw_target - abs(turn_yaw_rad)
                 mag = clamp(steer_cap * self.turn_kp * yaw_err / yaw_target,
-                            steer_floor, steer_cap)
+                            0.0, steer_cap)
                 steer = sign * mag
+                speed_scale = clamp(
+                    self.turn_finish_speed_factor + (1.0 - self.turn_finish_speed_factor) *
+                    yaw_err / max(yaw_target, 1e-3),
+                    self.turn_finish_speed_factor, 1.0)
+                base = base * speed_scale
             else:
                 steer = sign * steer_cap                       # fixed forward arc
             name = STATE_TURN_L if step == "left" else STATE_TURN_R
