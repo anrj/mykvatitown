@@ -1,0 +1,67 @@
+[gd_scene format=3 uid="uid://3a5ra5g8ri78"]
+
+[ext_resource type="PackedScene" uid="uid://by8pqr474iaqj" path="res://scenes/robot/duckie_bot.tscn" id="1_h126k"]
+[ext_resource type="Environment" uid="uid://xlfv0dsmbfcm" path="res://Environment.tres" id="2_t8tjl"]
+[ext_resource type="Texture2D" uid="uid://ctpxnl5i08jgn" path="res://textures/leafy_grass_diff_4k.png" id="3_wxx00"]
+[ext_resource type="Texture2D" uid="uid://dmarl4bfd7bia" path="res://textures/leafy_grass_nor_gl_4k.png" id="4_sb5da"]
+[ext_resource type="PackedScene" uid="uid://3d3mqjeeyhw6" path="res://scenes/robot/IntroductionBase.tscn" id="5_du2b5"]
+[ext_resource type="PackedScene" uid="uid://cghelvr8fx5bv" path="res://models/VehicleCorected.glb" id="6_lead"]
+[ext_resource type="Script" path="res://scripts/MovingObstacle.gd" id="7_lead_script"]
+
+[sub_resource type="WorldBoundaryShape3D" id="WorldBoundaryShape3D_b05od"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_r00g4"]
+albedo_color = Color(0.14695662, 0.23146757, 0.031017188, 1)
+albedo_texture = ExtResource("3_wxx00")
+normal_enabled = true
+normal_texture = ExtResource("4_sb5da")
+uv1_scale = Vector3(60, 60, 60)
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_4uon1"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_7gp57"]
+size = Vector3(2.0014038, 0.01751709, 1.9967651)
+
+[node name="convoying" type="Node3D" unique_id=1690158760]
+
+[node name="DuckieBot" parent="." unique_id=865415826 instance=ExtResource("1_h126k")]
+transform = Transform3D(-0.99948883, 0, -0.03196899, 0, 1, 0, 0.03196899, 0, -0.99948883, 4.154852, 0.044506483, 1.8970077)
+WheelPort = 5011
+CameraPort = 5011
+
+[node name="TopView" type="Camera3D" parent="DuckieBot" unique_id=749825057]
+transform = Transform3D(1.0000002, 0, 0, 0, 0.760406, 0.64944804, 0, -0.6494482, 0.7604062, 0, 0.549, 0.679)
+environment = ExtResource("2_t8tjl")
+
+[node name="Terrain" type="Node3D" parent="." unique_id=326204474]
+
+[node name="StaticBody3D" type="StaticBody3D" parent="Terrain" unique_id=1304902440]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Terrain/StaticBody3D" unique_id=1962863796]
+shape = SubResource("WorldBoundaryShape3D_b05od")
+
+[node name="NavigationObstacle3D" type="NavigationObstacle3D" parent="." unique_id=2130121707]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=1754924046]
+transform = Transform3D(10.057154, 0, 0, 0, 10.057154, 0, 0, 0, 10.057154, 4.5697584, 0.00669533, -0.9157721)
+material_override = SubResource("StandardMaterial3D_r00g4")
+mesh = SubResource("PlaneMesh_4uon1")
+
+[node name="StaticBody3D" type="StaticBody3D" parent="MeshInstance3D" unique_id=867727638]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="MeshInstance3D/StaticBody3D" unique_id=2097804976]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.0021057427, -0.007904088, -0.00582888)
+shape = SubResource("BoxShape3D_7gp57")
+
+[node name="KiuPathObj" parent="." unique_id=1908243731 instance=ExtResource("5_du2b5")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.2620525, 0.010445523, 4.8696938)
+
+[node name="LeadTruck" parent="." instance=ExtResource("6_lead")]
+transform = Transform3D(-0.99948883, 0, -0.03196899, 0, 1, 0, 0.03196899, 0, -0.99948883, 4.17, 0.08, 2.55)
+script = ExtResource("7_lead_script")
+speed = 0.04
+reach_distance = 0.05
+rotation_offset_degrees = 180.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1342242373]
+transform = Transform3D(1, 0, 0, 0, 0.0074698986, 0.9999721, 0, -0.9999721, 0.0074698986, -1.0819607, 10.15756, 0)

@@ -70,6 +70,7 @@ class LaneServoingAgent:
         self._left_history      = deque(maxlen=3)
         self._right_history     = deque(maxlen=3)
         self.last_debug_info    = self._empty_debug_info(480, 640)
+        self.last_steering      = 0.0
 
     def _calculate_error(self, yellow_xs, white_xs, left_det, right_det, w):
         if left_det and right_det and yellow_xs and white_xs:
@@ -165,6 +166,7 @@ class LaneServoingAgent:
         raw_error            = self._calculate_error(yellow_xs, white_xs, left_det, right_det, w)
         self._filtered_error = 0.7 * self._filtered_error + 0.3 * raw_error
         steering             = self._calculate_steering(self._filtered_error)
+        self.last_steering   = steering
         left, right          = self._motor_commands(steering, recovery, is_curve, both_visible)
         left, right          = self._smooth(left, right, both_visible)
 

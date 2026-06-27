@@ -15,7 +15,7 @@ from flask import Flask, Response, render_template_string, jsonify, request
 
 from tasks.visual_lane_servoing.packages.agent import LaneServoingAgent
 from tasks.object_detection.packages.agent import ObjectDetectionAgent, CLASS_NAMES
-from tasks.object_detection.packages.stop_activity import should_stop as student_should_stop
+from tasks.object_detection.packages.stop_behavior import should_stop as student_should_stop
 from servers.object_detection.visualization import draw_detections, draw_status_overlay
 from servers.templates.object_detection import OBJECT_DETECTION_TEMPLATE as HTML_TEMPLATE
 
@@ -34,6 +34,7 @@ wheels     = None
 running    = False
 manual_mode = False
 stop_event = threading.Event()
+TURN_GAIN = 0.15
 
 _frame_queue     = queue.Queue(maxsize=1)
 _last_detections = []
@@ -44,11 +45,6 @@ _stop_reason     = ''
 keys_pressed      = {'up': False, 'down': False, 'left': False, 'right': False}
 _keys_lock        = threading.Lock()
 _keys_last_update = time.time()
-
-# smooth deceleration ramp
-_speed_mult = 1.0
-DECEL_RATE = 0.03
-ACCEL_RATE = 0.05
 
 
 def manual_control_loop():
@@ -100,14 +96,19 @@ def detection_loop():
                 _last_detections = result
 
 
-def _should_stop(detections, frame_h: int):
-    # pass lane boundary info so should_stop can ignore off-road obstacles
-    lane_info = lane_agent.last_debug_info if lane_agent else None
-    return student_should_stop(detections, frame_h, lane_info=lane_info)
+def _should_stop(detections, current_lane_omega=0.0):
+    if det_agent is None:
+        return False, "", -1.0, -1.0
+
+    return student_should_stop(
+        detections,
+        det_agent.img_size,
+        current_lane_omega
+    )
 
 
 def visualize(frame_bgr):
-    global _stopped_by_det, _stop_reason, _speed_mult
+    global _stopped_by_det, _stop_reason
 
     if wheels is None:
         return draw_status_overlay(frame_bgr, 'Initializing...')
@@ -131,16 +132,28 @@ def visualize(frame_bgr):
     elif lane_agent is not None:
         pwm_left, pwm_right = lane_agent.compute_commands(frame_rgb)
 
-        should_stop, reason = _should_stop(detections, det_agent.img_size if det_agent else frame_bgr.shape[0])
+        should_stop, reason, override_v, override_omega = _should_stop(
+            detections,
+            current_lane_omega=(pwm_right - pwm_left)
+        )
+        print(
+            f"FSM -> stop={should_stop}, "
+            f"v={override_v}, "
+            f"omega={override_omega}, "
+            f"reason={reason}"
+        )
         _stopped_by_det = should_stop
         _stop_reason    = reason
 
-        if running and not should_stop:
-            _speed_mult = min(1.0, _speed_mult + ACCEL_RATE)
-            wheels.set_wheels_speed(pwm_left * _speed_mult, pwm_right * _speed_mult)
+        if running:
+            if override_v >= 0.0:
+                left_speed = override_v - (override_omega * TURN_GAIN)
+                right_speed = override_v + (override_omega * TURN_GAIN)
+                wheels.set_wheels_speed(left_speed, right_speed)
+            elif not should_stop:
+                wheels.set_wheels_speed(pwm_left, pwm_right)
         else:
-            _speed_mult = max(0.0, _speed_mult - DECEL_RATE)
-            wheels.set_wheels_speed(pwm_left * _speed_mult, pwm_right * _speed_mult)
+            wheels.set_wheels_speed(0.0, 0.0)
 
     if det_agent is not None and det_agent.model_loaded and detections:
         oh, ow = frame_bgr.shape[:2]

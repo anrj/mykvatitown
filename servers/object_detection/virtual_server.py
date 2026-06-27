@@ -14,7 +14,8 @@ from flask import Flask, Response, render_template_string, jsonify, request
 
 from tasks.visual_lane_servoing.packages.agent import LaneServoingAgent
 from tasks.object_detection.packages.agent import ObjectDetectionAgent, CLASS_NAMES
-from tasks.object_detection.packages.stop_activity import should_stop as student_should_stop
+from tasks.object_detection.packages.stop_behavior import should_stop as student_should_stop
+from tasks.object_detection.packages.stop_behavior import reset_fsm
 from servers.object_detection.visualization import draw_detections
 from servers.templates.object_detection import OBJECT_DETECTION_TEMPLATE as HTML_TEMPLATE
 
@@ -40,15 +41,11 @@ _last_detections = []
 _detection_lock  = threading.Lock()
 _stopped_by_det  = False
 _stop_reason     = ''
+_cooldown_until   = 0.0
 
 keys_pressed     = {'up': False, 'down': False, 'left': False, 'right': False}
 _keys_lock       = threading.Lock()
 _keys_last_update = time.time()
-
-# smooth deceleration ramp
-_speed_mult = 1.0
-DECEL_RATE = 0.03
-ACCEL_RATE = 0.05
 
 _current_scene   = 'object_detection'
 
@@ -104,16 +101,21 @@ def manual_control_loop():
         time.sleep(0.05)
 
 
-def _should_stop(detections):
+def _should_stop(detections, current_lane_omega=0.0):
+    global _cooldown_until
     if det_agent is None:
-        return False, ''
-    # pass lane boundary info so should_stop can ignore off-road obstacles
-    lane_info = lane_agent.last_debug_info if lane_agent else None
-    return student_should_stop(detections, det_agent.img_size, lane_info=lane_info)
+        return False, '', -1.0, -1.0
+
+    flag, reason, v, omega = student_should_stop(detections, det_agent.img_size, current_lane_omega)
+
+    if reason == "Maneuver Completed":
+        _cooldown_until = time.time() + 3.0
+
+    return flag, reason, v, omega
 
 
 def visualize(frame_rgb):
-    global _stopped_by_det, _stop_reason, _speed_mult
+    global _stopped_by_det, _stop_reason, _cooldown_until
 
     bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
@@ -135,18 +137,48 @@ def visualize(frame_rgb):
         _stopped_by_det = False
         _stop_reason    = ''
     elif lane_agent is not None:
+        # 1. FILTER: Erase background noise (ignore detections in the oncoming left lane)
+        clean_detections = []
+        for det in detections:
+            (x1, y1, x2, y2), score, cls_id = det
+            cx = (x1 + x2) / 2
+            if cx < (det_agent.img_size * 0.40):
+                continue
+            clean_detections.append(det)
+
         pwm_left, pwm_right = lane_agent.compute_commands(frame_rgb)
 
-        should_stop_flag, reason = _should_stop(detections)
+        should_stop_flag, reason, override_v, override_omega = _should_stop(
+            clean_detections,
+            current_lane_omega=lane_agent.last_steering
+        )
         _stopped_by_det = should_stop_flag
         _stop_reason    = reason
 
-        if running and not should_stop_flag and not wheels.is_game_over():
-            _speed_mult = min(1.0, _speed_mult + ACCEL_RATE)
-            wheels.set_wheels_speed(pwm_left * _speed_mult, pwm_right * _speed_mult)
+        # Actuator speed transmission
+        if running and not wheels.is_game_over():
+            # DYNAMIC CURVE SLOWDOWN MECHANISM
+            steering_strain = abs(pwm_left - pwm_right)
+
+            if override_v >= 0.0:
+                # Curve Adjustment for Override Pass maneuvers
+                if abs(override_omega) > 0.15:
+                    override_v *= 0.65  # Drop velocity by 35% during heavy curve passes
+
+                left_speed = override_v - (override_omega * 0.1)
+                right_speed = override_v + (override_omega * 0.1)
+                wheels.set_wheels_speed(left_speed, right_speed)
+            elif not should_stop_flag:
+                # Curve Adjustment for Normal Lane Following
+                if steering_strain > 0.08:
+                    slowdown_factor = max(0.45, 1.0 - (steering_strain * 1.8))
+                    pwm_left *= slowdown_factor
+                    pwm_right *= slowdown_factor
+                wheels.set_wheels_speed(pwm_left, pwm_right)
+            else:
+                wheels.set_wheels_speed(0.0, 0.0)
         else:
-            _speed_mult = max(0.0, _speed_mult - DECEL_RATE)
-            wheels.set_wheels_speed(pwm_left * _speed_mult, pwm_right * _speed_mult)
+            wheels.set_wheels_speed(0.0, 0.0)
 
     if det_agent is not None and det_agent.model_loaded and detections:
         oh, ow = bgr.shape[:2]
@@ -186,9 +218,11 @@ def stop():
 
 @app.route('/reset', methods=['POST'])
 def reset():
-    global _stopped_by_det, _stop_reason, _last_detections, running
+    global _stopped_by_det, _stop_reason, _last_detections, running, _cooldown_until
     if wheels:
         wheels.reset_game()
+    _cooldown_until = 0.0
+    reset_fsm()
     _stopped_by_det = False
     _stop_reason    = ''
     running         = True
