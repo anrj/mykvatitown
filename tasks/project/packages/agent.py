@@ -1,19 +1,21 @@
 """
-Convoying follower — lane-primary architecture.
+Convoying follower — lane-primary architecture with LED-blink turn trigger.
 
 STEERING is always from the shared LaneServoingAgent (stays in lane).
-The dot grid on the leader's back controls SPEED (span → distance) and
-TURN DETECTION (lateral excursion + row-tilt via PCA). When a turn is
-detected, the follower executes the same open-loop arc as the leader.
+The dot grid on the leader's back controls SPEED (span → distance).
+TURN DETECTION is driven by the leader's back-LED amber blink (5 Hz): the
+follower detects amber pixels in the left/right halves of the frame, watches
+the ~5 Hz cadence for a few frames, then runs the same open-loop arc as the
+leader. This replaces the fragile PCA-on-the-dot-grid turn detector that
+spuriously fired when the grid foreshortened mid-turn.
 
 FSM:
-  LANE_FOLLOW        — lane steering + grid speed modulation + turn detection
-  TURNING            — open-loop arc (same direction/params as leader), blind
-  LANE_FOLLOW_TIMEOUT — grid lost, no recent turn: keep lane-following, then stop
-  STOP               — wheels at 0; resume LANE_FOLLOW if grid reacquired
+  LANE_FOLLOW  — lane steering + grid speed modulation + LED-blink detection
+  TURNING      — open-loop arc (same direction/params as leader), blind
+  STOP         — wheels at 0; resume LANE_FOLLOW if grid reacquired
 
-No AprilTag / sign detection — the LEADER handles stop signs. No solvePnP /
-calibration required. PAUSED stops only the wheels.
+No AprilTag / sign detection — the LEADER handles stop signs. PAUSED stops
+only the wheels.
 """
 
 import os
@@ -33,7 +35,7 @@ STATUS = {}
 
 CFG = None
 _leader = None
-_turn = None
+_blink = None
 _ctrl = None
 _lane_agent = None
 
@@ -59,18 +61,15 @@ _DEFAULTS = {
         'clahe': True,
     },
     'turn': {
-        'excursion_thr': 0.35,
-        'excursion_thr_strong': 0.55,
-        'tilt_thr': 0.10,
-        'tilt_thr_strong': 0.18,
-        'sustain_frames': 4,
-        'clear_thr': 0.12,
-        'clear_tilt': 0.04,
-        'baseline_alpha': 0.02,
-        'self_stable_thr': 0.10,
-        'self_stable_alpha': 0.15,
-        'sign_invert': False,
-        # Turn arc params — same finetuned values as the leader
+        # LED blink detector parameters
+        'blink_hz': 5.0,                 # leader's expected blink cadence
+        'blink_sustain_frames': 4,      # consecutive amber frames to confirm
+        'blink_blink_frames': 3,        # how many of those must be "on"
+        'min_amber_frac': 0.002,        # min amber pixel fraction to be "lit"
+        'side_ratio': 1.8,              # left/right amber-count ratio to pick a side
+        'blink_window_s': 0.6,                # sliding window for blink edge counting
+        'blink_required_edges': 3,            # edges in window to confirm a turn
+        # Open-loop arc params (same finetuned values as the leader)
         'preturn_right_s': 0.83,
         'preturn_left_s': 0.33,
         'preturn_speed': 0.20,
@@ -80,7 +79,7 @@ _DEFAULTS = {
         'turn_left_pwm': [0.20, 0.50],
         'exit_s': 0.125,
         'exit_speed': 0.40,
-        'turn_cooldown_s': 3.0,       # suppress turn detection this long after a turn
+        'turn_cooldown_s': 3.0,         # suppress turn detection this long after a turn
     },
     'lane_fallback': {
         'enabled': True,
@@ -113,7 +112,7 @@ def load_config():
 
 
 # =====================================================================
-# SECTION 2: LEADER DETECTION  (dot grid — unchanged from follower-v2)
+# SECTION 2: LEADER DETECTION  (dot grid — used for speed/distance only)
 # =====================================================================
 
 class LeaderDetector:
@@ -201,109 +200,114 @@ class LeaderDetector:
 
 
 # =====================================================================
-# SECTION 3: TURN DETECTION  (unchanged from follower-v2)
+# SECTION 3: LED-BLINK TURN DETECTION
+# Replaces the dot-grid PCA detector. The leader blinks its back LEDs amber
+# at ~5 Hz during its STOP+turn phase; the follower watches for that amber
+# cadence, with L/R disambiguated by which side of the frame the amber
+# dominates.
 # =====================================================================
 
-class TurnDetector:
+class LEDBlinkDetector:
+    """Detects the leader's amber LED blink and returns (turn_dir, turn_active).
+
+    Tracks lit↔unlit edges (False→True transitions) in a sliding time window.
+    A real 5 Hz amber blink with ~50% duty produces one edge every ~200 ms, so
+    `required_edges` edges within `window_s` is a robust cadence signal that
+    survives single-frame detection misses (unlike a naive sustained-lit count).
+    L/R is decided from which half of the frame the amber pixels dominate.
+    """
+
+    # Amber HSV — matches DuckieTown's LED amber RGB (1.0, 0.6, 0.0), which is
+    # roughly H~25, S~170, V~255 in OpenCV scale.
+    _AMBER_LOW = np.array([15, 100, 100], dtype=np.uint8)
+    _AMBER_HIGH = np.array([35, 255, 255], dtype=np.uint8)
+
     def __init__(self, cfg):
         t = cfg.get('turn', {})
-        self.excursion_thr = float(t.get('excursion_thr', 0.35))
-        self.excursion_thr_strong = float(t.get('excursion_thr_strong', 0.55))
-        self.tilt_thr = float(t.get('tilt_thr', 0.10))
-        self.tilt_thr_strong = float(t.get('tilt_thr_strong', 0.18))
-        self.sustain_frames = int(t.get('sustain_frames', 4))
-        self.clear_thr = float(t.get('clear_thr', 0.12))
-        self.clear_tilt = float(t.get('clear_tilt', 0.04))
-        self.baseline_alpha = float(t.get('baseline_alpha', 0.02))
-        self.self_stable_thr = float(t.get('self_stable_thr', 0.10))
-        self.self_stable_alpha = float(t.get('self_stable_alpha', 0.15))
-        self.sign_invert = bool(t.get('sign_invert', False))
+        self.blink_hz = float(t.get('blink_hz', 5.0))
+        period = 1.0 / max(0.01, self.blink_hz)
+        # Default window = ~3 blink periods; required_edges = ~3 edges.
+        self.window_s = float(t.get('blink_window_s', period * 3.0))
+        self.required_edges = int(t.get('blink_required_edges', 3))
+        self.min_amber_frac = float(t.get('min_amber_frac', 0.002))
+        self.side_ratio = float(t.get('side_ratio', 1.8))
 
-        self.lateral_baseline = 0.0
-        self.tilt_baseline = 0.0
-        self._self_stable_ema = 0.0
-        self._sustain = 0
-        self._sustain_sign = 0
+        self._edge_times = []        # monotonic timestamps of lit-edges in window
+        self._last_was_lit = False
         self.turn_dir = 'none'
         self.turn_active = False
-        self.excursion = 0.0
-        self.tilt = 0.0
+        self.amber_left = 0
+        self.amber_right = 0
+        self.last_lit = False
+        self.edges_in_window = 0
+        self.last_edge_delta = 0.0
+        self._prev_edge_time = 0.0
 
-    @staticmethod
-    def _row_tilt(pts, rows, cols):
-        p = np.asarray(pts, dtype=np.float64)
-        p = p - p.mean(axis=0)
-        cov = np.cov(p[:, 0], p[:, 1])
-        _, v = np.linalg.eigh(cov)
-        axis = v[:, -1]
-        if axis[0] < 0:
-            axis = -axis
-        return float(np.arctan2(axis[1], axis[0]))
+    def _detect_amber(self, frame_bgr):
+        """Count amber pixels in left and right halves of the frame (full frame)."""
+        h, w = frame_bgr.shape[:2]
+        hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, self._AMBER_LOW, self._AMBER_HIGH)
+        kernel = np.ones((3, 3), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        left = mask[:, :w // 2]
+        right = mask[:, w // 2:]
+        left_count = int(np.count_nonzero(left))
+        right_count = int(np.count_nonzero(right))
+        total = left_count + right_count
+        frac = total / float(max(1, h * w))
+        return left_count, right_count, frac
 
-    def update(self, found, lateral_error, pts, steer, rows, cols):
-        self._self_stable_ema = ((1 - self.self_stable_alpha) * self._self_stable_ema
-                                 + self.self_stable_alpha * abs(steer))
-        unstable = self._self_stable_ema > self.self_stable_thr
+    def update(self, frame_bgr):
+        now = time.monotonic()
+        left, right, frac = self._detect_amber(frame_bgr)
+        self.amber_left = left
+        self.amber_right = right
+        self.last_lit = frac >= self.min_amber_frac
 
-        if found:
-            raw_tilt = self._row_tilt(pts, rows, cols) if pts is not None else 0.0
-            self.tilt = raw_tilt - self.tilt_baseline
-            self.excursion = lateral_error - self.lateral_baseline
-            if not unstable and not self.turn_active:
-                a = self.baseline_alpha
-                self.lateral_baseline = (1 - a) * self.lateral_baseline + a * lateral_error
-                self.tilt_baseline = (1 - a) * self.tilt_baseline + a * raw_tilt
-        else:
-            self.excursion = 0.0
-            self.tilt = 0.0
+        just_lit_edge = self.last_lit and not self._last_was_lit
+        if just_lit_edge:
+            # Cadence check (optional): if previous edge was at wildly wrong
+            # interval vs the expected period, drop this edge.
+            if self._prev_edge_time > 0.0:
+                self.last_edge_delta = now - self._prev_edge_time
+            self._edge_times.append(now)
+            self._prev_edge_time = now
 
-        e_thr = self.excursion_thr_strong if unstable else self.excursion_thr
-        t_thr = self.tilt_thr_strong if unstable else self.tilt_thr
+        # Drop edges older than the sliding window.
+        cutoff = now - self.window_s
+        while self._edge_times and self._edge_times[0] < cutoff:
+            self._edge_times.pop(0)
+        self.edges_in_window = len(self._edge_times)
 
-        es = 1 if self.excursion > e_thr else (-1 if self.excursion < -e_thr else 0)
-        ts = 1 if self.tilt > t_thr else (-1 if self.tilt < -t_thr else 0)
-        if es != 0 and ts != 0:
-            sign = es if es == ts else 0
-        else:
-            sign = es or ts
-
-        if sign != 0:
-            if sign == self._sustain_sign:
-                self._sustain += 1
+        # Decide whether we have a confirmed blink.
+        if self.edges_in_window >= self.required_edges:
+            # Snap the dominant side from the current frame's amber-split.
+            if left > self.side_ratio * max(1, right):
+                self.turn_dir = 'L'
+            elif right > self.side_ratio * max(1, left):
+                self.turn_dir = 'R'
             else:
-                self._sustain_sign = sign
-                self._sustain = 1
-            if self._sustain >= self.sustain_frames:
-                self.turn_active = True
-                raw = 'L' if sign < 0 else 'R'
-                self.turn_dir = ('R' if raw == 'L' else 'L') if self.sign_invert else raw
+                self.turn_dir = 'L' if left >= right else 'R'
+            self.turn_active = True
         else:
-            if self.turn_active and abs(self.excursion) < self.clear_thr \
-                    and abs(self.tilt) < self.clear_tilt:
-                self.turn_active = False
+            if not self.turn_active:
                 self.turn_dir = 'none'
-                self._sustain = 0
-                self._sustain_sign = 0
-            elif not self.turn_active:
-                self._sustain = max(0, self._sustain - 1)
-                if self._sustain == 0:
-                    self._sustain_sign = 0
 
+        self._last_was_lit = self.last_lit
         return self.turn_dir, self.turn_active
 
     def reset(self):
-        """Full reset after a completed turn — clears state AND baselines so
-        the detector doesn't immediately re-fire on the stale excursion/tilt
-        values (which would cause an infinite turn loop)."""
-        self.turn_active = False
+        """Full reset after the open-loop arc has been completed."""
+        self._edge_times = []
+        self._last_was_lit = False
+        self._prev_edge_time = 0.0
+        self.last_edge_delta = 0.0
         self.turn_dir = 'none'
-        self._sustain = 0
-        self._sustain_sign = 0
-        self.excursion = 0.0
-        self.tilt = 0.0
-        self.lateral_baseline = 0.0
-        self.tilt_baseline = 0.0
-        self._self_stable_ema = 0.0
+        self.turn_active = False
+        self.amber_left = 0
+        self.amber_right = 0
+        self.edges_in_window = 0
 
 
 # =====================================================================
@@ -351,7 +355,7 @@ class Controller:
 
 
 def _sync_cfg():
-    global _ctrl, _turn, _leader, CFG
+    global _ctrl, _blink, _leader, CFG
     if CFG is None:
         return
     c = CFG['control']
@@ -366,18 +370,12 @@ def _sync_cfg():
         _ctrl.deadband = float(CFG['leader']['span_deadband'])
         _ctrl.error_alpha = float(c.get('error_alpha', _ctrl.error_alpha))
     t = CFG.get('turn', {})
-    if _turn is not None:
-        _turn.excursion_thr = float(t.get('excursion_thr', _turn.excursion_thr))
-        _turn.excursion_thr_strong = float(t.get('excursion_thr_strong', _turn.excursion_thr_strong))
-        _turn.tilt_thr = float(t.get('tilt_thr', _turn.tilt_thr))
-        _turn.tilt_thr_strong = float(t.get('tilt_thr_strong', _turn.tilt_thr_strong))
-        _turn.sustain_frames = int(t.get('sustain_frames', _turn.sustain_frames))
-        _turn.clear_thr = float(t.get('clear_thr', _turn.clear_thr))
-        _turn.clear_tilt = float(t.get('clear_tilt', _turn.clear_tilt))
-        _turn.baseline_alpha = float(t.get('baseline_alpha', _turn.baseline_alpha))
-        _turn.self_stable_thr = float(t.get('self_stable_thr', _turn.self_stable_thr))
-        _turn.self_stable_alpha = float(t.get('self_stable_alpha', _turn.self_stable_alpha))
-        _turn.sign_invert = bool(t.get('sign_invert', _turn.sign_invert))
+    if _blink is not None:
+        _blink.blink_hz = float(t.get('blink_hz', _blink.blink_hz))
+        _blink.window_s = float(t.get('blink_window_s', _blink.window_s))
+        _blink.required_edges = int(t.get('blink_required_edges', _blink.required_edges))
+        _blink.min_amber_frac = float(t.get('min_amber_frac', _blink.min_amber_frac))
+        _blink.side_ratio = float(t.get('side_ratio', _blink.side_ratio))
     d = CFG.get('detection', {})
     if _leader is not None:
         _leader.hold_frames = int(d.get('hold_frames', _leader.hold_frames))
@@ -386,14 +384,13 @@ def _sync_cfg():
 
 
 # =====================================================================
-# SECTION 5: LED SIGNALLING
+# SECTION 5: LED SIGNALLING  (the follower's own dashboard LEDs)
 # =====================================================================
 
 _COLORS = {
-    'LANE_FOLLOW':         [0.0, 1.0, 0.0],   # green
-    'TURNING':             [0.3, 0.3, 1.0],   # blue
-    'LANE_FOLLOW_TIMEOUT': [1.0, 0.7, 0.0],   # amber
-    'STOP':                [1.0, 0.0, 0.0],   # red
+    'LANE_FOLLOW': [0.0, 1.0, 0.0],   # green
+    'TURNING':     [0.3, 0.3, 1.0],   # blue
+    'STOP':        [1.0, 0.0, 0.0],   # red
 }
 
 
@@ -415,10 +412,6 @@ def set_leds(leds, state, turn_dir='none'):
 
 # =====================================================================
 # SECTION 6: DEBUG OVERLAY + STATE MACHINE + main()
-#   LANE_FOLLOW  — lane steering + grid speed + turn detection
-#   TURNING      — open-loop arc (blind, same params as leader)
-#   LANE_FOLLOW_TIMEOUT — grid lost, keep lane-following, then stop
-#   STOP         — wheels at 0
 # =====================================================================
 
 def _annotate(bgr, det):
@@ -437,10 +430,6 @@ def _annotate(bgr, det):
         col = (0, 255, 0) if method != 'held' else (0, 180, 255)
         for (x, y) in c:
             cv2.circle(img, (x, y), 3, col, -1)
-        bx = int(w / 2.0 + det.get('lateral_baseline', 0.0) * (w / 2.0))
-        cv2.line(img, (bx, 0), (bx, h), (255, 0, 255), 1)
-        cv2.putText(img, 'base', (bx + 2, 14),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
 
     if det.get('turn_dir') in ('L', 'R'):
         arrow = '<<< LEFT' if det['turn_dir'] == 'L' else 'RIGHT >>>'
@@ -449,36 +438,57 @@ def _annotate(bgr, det):
         cv2.putText(img, arrow, (w // 2 - 70, 26),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 165, 255), 2)
 
+    # LED blink side bar (left/right amber counts).
     bar_w = int(w * 0.4)
     bar_x = w // 2 - bar_w // 2
     bar_y = h - 22
     cv2.rectangle(img, (bar_x, bar_y), (bar_x + bar_w, bar_y + 8), (40, 40, 40), -1)
     cv2.line(img, (w // 2, bar_y - 2), (w // 2, bar_y + 10), (90, 90, 90), 1)
-    ex = int(np.clip(det.get('excursion', 0.0), -1, 1) * bar_w / 2)
-    cv2.line(img, (w // 2, bar_y + 4), (w // 2 + ex, bar_y + 4), (0, 255, 255), 2)
+    left = int(det.get('amber_left', 0))
+    right = int(det.get('amber_right', 0))
+    max_side = max(left, right, 1)
+    half = bar_w // 2
+    lw = int(half * (left / float(max_side)))
+    rw = int(half * (right / float(max_side)))
+    cv2.rectangle(img, (w // 2 - lw, bar_y + 1), (w // 2, bar_y + 7), (0, 165, 255), -1)
+    cv2.rectangle(img, (w // 2, bar_y + 1), (w // 2 + rw, bar_y + 7), (0, 165, 255), -1)
 
     state = det.get('state', '')
     span = det.get('span', 0.0)
     lat = det.get('lateral_error', 0.0)
-    exc = det.get('excursion', 0.0)
-    tilt = det.get('tilt', 0.0)
     quality = det.get('quality', 0.0)
     speed_scale = det.get('speed_scale', 1.0)
     lane_det = det.get('lane_detected', False)
+    lit = det.get('lit', False)
+    edges = det.get('edges_in_window', 0)
     txt = (f'{state}  span={span:.2f}  scale={speed_scale:.2f}  '
-           f'lane={lane_det}  e={lat:+.2f}  exc={exc:+.2f}  tilt={tilt:+.2f}  '
+           f'lane={lane_det}  e={lat:+.2f}  '
+           f'amber L={left} R={right} lit={int(lit)} edges={edges}  '
            f'{method or "-"}  q={quality:.1f}')
-    cv2.putText(img, txt, (10, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 4)
-    cv2.putText(img, txt, (10, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+    cv2.putText(img, txt, (10, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 4)
+    cv2.putText(img, txt, (10, h - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1)
     return img
 
 
+def _reset_lane_agent_filters():
+    """Reset LaneServoingAgent's smoothing filters so the first frame after a
+    blind TURNING arc doesn't apply a stale steering command (fixes the
+    post-turn hard-steer jerk)."""
+    if _lane_agent is None:
+        return
+    _lane_agent._filtered_error = 0.0
+    _lane_agent._prev_error = 0.0
+    _lane_agent._filtered_steering = 0.0
+    _lane_agent._left_history.clear()
+    _lane_agent._right_history.clear()
+
+
 def main(camera, wheels, leds, stop_event):
-    global STATUS, CFG, _leader, _turn, _ctrl, _lane_agent
+    global STATUS, CFG, _leader, _blink, _ctrl, _lane_agent
 
     CFG = load_config()
     _leader = LeaderDetector(CFG)
-    _turn = TurnDetector(CFG)
+    _blink = LEDBlinkDetector(CFG)
     _ctrl = Controller(CFG)
     _lane_agent = LaneServoingAgent()
 
@@ -492,8 +502,8 @@ def main(camera, wheels, leds, stop_event):
     turn_state_start = 0.0
     turn_arc_dir = 'none'
     turn_phase = ''        # 'preturn' | 'turn' | 'exit'
-    lost_since = None      # monotonic time when grid was first lost
-    turn_cooldown_until = 0.0  # suppress turn detection until this time
+    lost_since = None
+    turn_cooldown_until = 0.0
     turn_cooldown_s = float(t.get('turn_cooldown_s', 3.0))
 
     try:
@@ -506,19 +516,27 @@ def main(camera, wheels, leds, stop_event):
 
             now = time.monotonic()
 
-            # --- lane following (always runs for steering) ---
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            lane_l, lane_r = _lane_agent.compute_commands(rgb)
-            lane_info = _lane_agent.last_debug_info
-            lane_detected = bool(lane_info.get('lane_detected', False))
+            # --- lane following (skipped during TURNING to avoid filter contamination) ---
+            lane_l = lane_r = 0.0
+            lane_info = {}
+            lane_detected = False
+            if state != 'TURNING':
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                lane_l, lane_r = _lane_agent.compute_commands(rgb)
+                lane_info = _lane_agent.last_debug_info
+                lane_detected = bool(lane_info.get('lane_detected', False))
 
-            # --- grid detection (for speed + turn detection) ---
+            # --- grid detection (for speed) ---
             found, lateral_error, span, centers, method, quality = _leader.detect(frame)
+
+            # --- LED blink turn detection (only in LANE_FOLLOW, suppressed by cooldown) ---
+            tdir, tactive = 'none', False
+            if state == 'LANE_FOLLOW' and now >= turn_cooldown_until:
+                tdir, tactive = _blink.update(frame)
 
             # --- FSM ---
             pwm_l, pwm_r = 0.0, 0.0
             speed_scale = 1.0
-            tdir, tactive = 'none', False
 
             if state == 'LANE_FOLLOW':
                 if found:
@@ -535,15 +553,6 @@ def main(camera, wheels, leds, stop_event):
 
                     pwm_l = lane_l * speed_scale
                     pwm_r = lane_r * speed_scale
-
-                    # turn detection (suppressed during cooldown after a turn)
-                    if now >= turn_cooldown_until:
-                        tdir, tactive = _turn.update(
-                            found, lateral_error, centers,
-                            abs(lane_l - lane_r),  # steer magnitude from lane agent
-                            _leader.rows, _leader.cols)
-                    else:
-                        tdir, tactive = 'none', False
 
                     if tactive and tdir in ('L', 'R'):
                         state = 'TURNING'
@@ -562,7 +571,7 @@ def main(camera, wheels, leds, stop_event):
                         _ctrl.reset()
 
             elif state == 'TURNING':
-                # blind open-loop arc (same params as leader)
+                # blind open-loop arc — lane steering intentionally discarded
                 if turn_phase == 'preturn':
                     ps = float(t.get('preturn_speed', 0.20))
                     pwm_l = pwm_r = ps
@@ -588,10 +597,13 @@ def main(camera, wheels, leds, stop_event):
                     pwm_l = pwm_r = es
                     if now - turn_state_start >= float(t.get('exit_s', 0.125)):
                         state = 'LANE_FOLLOW'
-                        _turn.reset()
+                        _blink.reset()
                         _ctrl.reset()
                         lost_since = None
                         turn_cooldown_until = now + turn_cooldown_s
+                        # Drop lane agent's stale filter state so the first
+                        # post-turn frame isn't steered by old commands.
+                        _reset_lane_agent_filters()
 
                 tdir = turn_arc_dir
                 tactive = True
@@ -619,8 +631,9 @@ def main(camera, wheels, leds, stop_event):
                 'lateral_error': lateral_error, 'state': state,
                 'speed_scale': speed_scale,
                 'turn_dir': tdir, 'turn_active': tactive,
-                'excursion': _turn.excursion, 'tilt': _turn.tilt,
-                'lateral_baseline': _turn.lateral_baseline,
+                'amber_left': _blink.amber_left, 'amber_right': _blink.amber_right,
+                'lit': _blink.last_lit,
+                'edges_in_window': _blink.edges_in_window,
                 'lane_detected': lane_detected,
             }
             with _det_lock:
@@ -630,12 +643,11 @@ def main(camera, wheels, leds, stop_event):
                 'lateral_error': round(lateral_error, 3),
                 'speed_scale': round(speed_scale, 3),
                 'turn_dir': tdir, 'turn_active': tactive,
-                'baseline': round(_turn.lateral_baseline, 3),
-                'excursion': round(_turn.excursion, 3),
-                'tilt': round(_turn.tilt, 3),
+                'amber_left': _blink.amber_left, 'amber_right': _blink.amber_right,
+                'lit': _blink.last_lit,
+                'edges': _blink.edges_in_window,
                 'detection_method': method, 'quality': round(quality, 2),
                 'lane_detected': lane_detected,
-                'lane_fallback': state in ('LANE_FOLLOW_TIMEOUT',),
             }
 
             stop_event.wait(dt)

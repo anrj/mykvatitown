@@ -70,16 +70,75 @@ stop_event = threading.Event()
 _latest_frame = None
 _latest_lock  = threading.Lock()
 
+# Self-healing state for the camera loop. Without try/except around
+# camera.read(), a single transient nvarguscamerasrc/GStreamer exception
+# silently kills the only producer thread -> the dashboard freezes forever
+# on a live-looking stale frame (the known Jetson IMX219 blip). The loop
+# below mirrors make_frame_generator's try/except self-heal and additionally
+# re-opens the camera if no fresh frame arrives for _RECONNECT_TIMEOUT.
+_last_good_frame_time  = 0.0
+_consecutive_failures  = 0
+_RECONNECT_TIMEOUT     = 2.0
+
+
+def _reconnect_camera():
+    """Tear down and re-open the GStreamer pipeline (best effort)."""
+    try:
+        camera.stop()
+    except Exception as e:
+        print(f"[CameraLoop] stop() during reconnect: {e}")
+    try:
+        camera.start()
+        print("[CameraLoop] Camera reconnected.")
+    except Exception as e:
+        print(f"[CameraLoop] Reconnect failed: {e}")
+    global _last_good_frame_time, _consecutive_failures
+    _last_good_frame_time = time.time()
+    _consecutive_failures = 0
+
 
 def _camera_loop():
-    global _latest_frame
+    """Continuously pull frames from the real camera into _latest_frame.
+
+    Self-heals transient read() exceptions and reconnects the camera if it
+    stops producing frames. The agent and /video feed read _latest_frame
+    (non-consuming), so a producer hiccup is masked rather than permanent."""
+    global _latest_frame, _last_good_frame_time, _consecutive_failures
+    _last_good_frame_time = time.time()
     while not stop_event.is_set():
-        ok, frame = camera.read()
+        try:
+            ok, frame = camera.read()
+        except Exception as e:
+            print(f"[CameraLoop] read() exception: {e}")
+            ok, frame = False, None
+
         if ok and frame is not None:
             with _latest_lock:
                 _latest_frame = frame
+            _last_good_frame_time = time.time()
+            _consecutive_failures = 0
         else:
-            time.sleep(0.005)
+            _consecutive_failures += 1
+            time.sleep(0.01 if _consecutive_failures < 10 else 0.1)
+
+        if not stop_event.is_set() and (time.time() - _last_good_frame_time) > _RECONNECT_TIMEOUT:
+            print(f"[CameraLoop] No fresh frames for >{_RECONNECT_TIMEOUT:.1f}s — reconnecting...")
+            _reconnect_camera()
+
+
+def _run_agent_supervised(frame_source, wheels, leds, stop_event):
+    """Run agent.main, restarting it if it dies unexpectedly. Same self-heal
+    idea as _camera_loop: a transient per-frame exception in agent.main must
+    not permanently freeze the dashboard overlay (which reads agent.DETECTION)."""
+    while not stop_event.is_set():
+        try:
+            agent.main(frame_source, AgentWheels(wheels), leds, stop_event)
+            return  # main returned cleanly (shutdown)
+        except Exception as e:
+            if stop_event.is_set():
+                return
+            print(f"[AgentThread] agent.main crashed: {e}; restarting in 1s...")
+            stop_event.wait(1.0)
 
 
 class _LiveFrameSource:
@@ -293,7 +352,7 @@ def main():
     stop_event.clear()
     threading.Thread(target=_camera_loop, daemon=True, name='CameraLoop').start()
     threading.Thread(
-        target=agent.main,
+        target=_run_agent_supervised,
         args=(_frame_source, AgentWheels(wheels), leds, stop_event),
         daemon=True, name='LeaderAgentThread',
     ).start()
