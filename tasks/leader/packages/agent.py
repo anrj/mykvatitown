@@ -154,7 +154,6 @@ def main(camera, wheels, leds, stop_event):
     turn_sequence = list(turn_cfg.get('turn_sequence', ['R', 'L', 'S', 'S']))
     turn_cooldown_s = float(turn_cfg.get('turn_cooldown_s', 3.0))
 
-    # FSM state
     state = 'CRUISE'
     state_start = time.monotonic()
     turn_count = 0
