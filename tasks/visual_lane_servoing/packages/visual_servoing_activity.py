@@ -158,11 +158,6 @@ def _filter_yellow_components(mask: np.ndarray, h: int, w: int) -> np.ndarray:
 
 
 def detect_lane_markings(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    image is BGR. agent.py converts camera RGB -> BGR before calling this.
-    Returns:
-        yellow_mask, white_mask
-    """
     h, w = image.shape[:2]
 
     imghsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
