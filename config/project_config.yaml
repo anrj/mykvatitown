@@ -1,6 +1,5 @@
 # Convoying follower — REAL HARDWARE.
 # Lane servoing gains come from config/lane_servoing_config.yaml (shared).
-# Turn arc params are the same finetuned values as the leader.
 
 leader:
   grid_cols: 7
@@ -25,25 +24,6 @@ detection:
   hold_frames: 3
   roi_pad: 30
   clahe: true
-
-turn:
-  # LED blink detector (leader blinks amber back LEDs at 2 Hz during STOP).
-  blink_hz: 2.0
-  blink_window_s: 1.5
-  blink_required_edges: 2
-  min_amber_frac: 0.0005
-  side_ratio: 1.8
-  # Turn arc params — same as leader (finetuned by traffic team at 24fps)
-  preturn_right_s: 0.83
-  preturn_left_s: 0.33
-  preturn_speed: 0.20
-  turn_right_s: 1.04
-  turn_left_s: 2.33
-  turn_right_pwm: [0.60, 0.05]
-  turn_left_pwm: [0.20, 0.50]
-  exit_s: 0.125
-  exit_speed: 0.40
-  turn_cooldown_s: 3.0
 
 lane_fallback:
   enabled: true

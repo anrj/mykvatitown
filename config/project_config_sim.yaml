@@ -1,53 +1,27 @@
-# Convoying follower — SIMULATION.
-# Lane servoing gains come from config/lane_servoing_config.yaml (shared).
-
-leader:
-  grid_cols: 7
-  grid_rows: 3
-  dot_spacing_m: 0.0125
-  blob_min_area: 6.0
-  target_span: 0.20
-  stop_span: 0.30
-  span_deadband: 0.03
-
+camera:
+  dist_coeffs: null
+  matrix: null
 control:
-  max_speed: 0.45
-  chase_speed: 0.30
-  dist_kp: 2.0
   accel_rate: 0.05
+  chase_speed: 0.33
   decel_rate: 0.08
-  search_after_frames: 24
-  loop_hz: 24
+  dist_kp: 2.0
   error_alpha: 0.3
-
+  loop_hz: 24
+  max_speed: 0.45
+  search_after_frames: 24
 detection:
+  clahe: true
   hold_frames: 3
   roi_pad: 30
-  clahe: true
-
-turn:
-  # LED blink detector (leader blinks amber back LEDs at 2 Hz during STOP).
-  blink_hz: 2.0
-  blink_window_s: 1.5
-  blink_required_edges: 2
-  min_amber_frac: 0.0005
-  side_ratio: 1.8
-  # Sim-tuned arc params (conservative PWM — no deadzone in Godot).
-  preturn_right_s: 0.83
-  preturn_left_s: 0.33
-  preturn_speed: 0.25
-  turn_right_s: 1.5
-  turn_left_s: 1.8
-  turn_right_pwm: [0.30, 0.15]
-  turn_left_pwm: [0.15, 0.30]
-  exit_s: 0.125
-  exit_speed: 0.35
-  turn_cooldown_s: 3.0
-
 lane_fallback:
   enabled: true
   lane_follow_timeout_s: 5.0
-
-camera:
-  matrix: null
-  dist_coeffs: null
+leader:
+  blob_min_area: 6.0
+  dot_spacing_m: 0.0125
+  grid_cols: 7
+  grid_rows: 3
+  span_deadband: 0.03
+  stop_span: 0.3
+  target_span: 0.25

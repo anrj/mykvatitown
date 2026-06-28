@@ -468,7 +468,7 @@ transform = Transform3D(0.9999896, 0, -4.301903e-09, 0, 1, 0, 4.301903e-09, 0, 0
 shape = SubResource("BoxShape3D_bir6l")
 
 [node name="DotPlate" type="MeshInstance3D" parent="NPCPath/PathFollower/DuckieBot_NPC" unique_id=995742087]
-transform = Transform3D(0.8, 0, 0, 0, 0.8, 0, 0, 0, 0.8, 0.00063192844, 0.059125625, 0.10541725)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.00063192844, 0.04853619, 0.10541725)
 material_override = SubResource("StandardMaterial3D_spf2e")
 mesh = SubResource("QuadMesh_5nntr")
 script = ExtResource("20_dotpl")

@@ -5,13 +5,6 @@
 [sub_resource type="BoxShape3D" id="BoxShape3D_bir6l"]
 size = Vector3(0.1350708, 0.11753559, 0.19760895)
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_back_led"]
-shading_mode = 0
-albedo_color = Color(1, 0.6, 0, 1)
-
-[sub_resource type="QuadMesh" id="QuadMesh_back_led"]
-size = Vector2(0.05, 0.025)
-
 [node name="DuckieBot_NPC" type="CharacterBody3D" unique_id=865415826]
 
 [node name="VehicleCorected" parent="." unique_id=1573770069 instance=ExtResource("2_7vqs5")]
@@ -20,13 +13,3 @@ transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 0, 0
 [node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=894967562]
 transform = Transform3D(0.9999896, 0, -4.301903e-09, 0, 1, 0, 4.301903e-09, 0, 0.9999896, 2.8588012e-11, 0.03603549, 0.006219766)
 shape = SubResource("BoxShape3D_bir6l")
-
-[node name="BackLED_L" type="MeshInstance3D" parent="." unique_id=1634431555]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.0350017, 0.031452347, 0.11)
-material_override = SubResource("StandardMaterial3D_back_led")
-mesh = SubResource("QuadMesh_back_led")
-
-[node name="BackLED_R" type="MeshInstance3D" parent="." unique_id=1353935055]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.03883722, 0.030872367, 0.11)
-material_override = SubResource("StandardMaterial3D_back_led")
-mesh = SubResource("QuadMesh_back_led")
