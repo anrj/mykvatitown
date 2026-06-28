@@ -63,6 +63,10 @@ _CONFIG_SLIDERS = [
     ('control', 'error_alpha',   'Error LP Alpha',   0.05, 1.00, 0.01),
     ('detection', 'hold_frames', 'Hold Frames',      0,    10,    1),
     ('detection', 'roi_pad',     'ROI Pad (px)',     0,     120,   2),
+    ('turn_bias', 'bias_amount', 'Bias Amount',      0.0,   0.40, 0.01),
+    ('turn_bias', 'bias_duration_s', 'Bias Duration (s)', 0.2, 3.0, 0.1),
+    ('turn_bias', 'bias_ramp_s', 'Bias Ramp (s)',    0.05,  1.5, 0.05),
+    ('turn_bias', 'bias_excursion_thr', 'Bias Exc Thr',  0.05, 0.80, 0.01),
     ('lane_fallback', 'lane_follow_timeout_s', 'Lane Timeout (s)', 1.0, 15.0, 0.5),
 ]
 
@@ -440,7 +444,7 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying â€
     </div>
     <div class="card">
       <div class="card-h">Turn Config</div>
-      <div id="sliders-turn"></div>
+      <div id="sliders-turn_bias"></div>
     </div>
     <div class="card">
       <div class="card-h">Lane Fallback</div>

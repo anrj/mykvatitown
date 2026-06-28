@@ -1,17 +1,3 @@
-"""
-Convoying follower — lane-primary architecture.
-
-STEERING is always from the shared LaneServoingAgent (stays in lane).
-The dot grid on the leader's back controls SPEED (span -> distance).
-No turn detection -- the follower navigates intersections purely via
-lane servoing (lane markings curve at intersection tiles, detect_curve
-handles the rest).
-
-FSM:
-  LANE_FOLLOW -- lane steering + grid speed modulation
-  STOP        -- wheels at 0; resume LANE_FOLLOW if grid reacquired
-"""
-
 import os
 import time
 import threading
@@ -50,6 +36,12 @@ _DEFAULTS = {
         'hold_frames': 3,
         'roi_pad': 30,
         'clahe': True,
+    },
+    'turn_bias': {
+        'bias_amount': 0.15,
+        'bias_duration_s': 1.0,
+        'bias_ramp_s': 0.3,
+        'bias_excursion_thr': 0.3,
     },
     'lane_fallback': {
         'enabled': True,
@@ -283,9 +275,18 @@ def main(camera, wheels, leds, stop_event):
     dt = 1.0 / float(CFG['control']['loop_hz'])
     lf = CFG.get('lane_fallback', {})
     lane_follow_timeout_s = float(lf.get('lane_follow_timeout_s', 5.0))
+    tb = CFG.get('turn_bias', {})
+    bias_amount = float(tb.get('bias_amount', 0.15))
+    bias_duration_s = float(tb.get('bias_duration_s', 1.0))
+    bias_ramp_s = float(tb.get('bias_ramp_s', 0.3))
+    bias_excursion_thr = float(tb.get('bias_excursion_thr', 0.3))
 
     state = 'LANE_FOLLOW'
     lost_since = None
+    _last_lat = 0.0
+    _bias = 0.0
+    _bias_target = 0.0
+    _bias_start = 0.0
 
     try:
         while not stop_event.is_set():
@@ -310,6 +311,7 @@ def main(camera, wheels, leds, stop_event):
             if state == 'LANE_FOLLOW':
                 if found:
                     lost_since = None
+                    _last_lat = lateral_error
                     fspan = _ctrl.filtered_span(span)
                     if fspan >= _ctrl.stop_span:
                         speed_scale = 0.0
@@ -321,9 +323,29 @@ def main(camera, wheels, leds, stop_event):
                     pwm_l = lane_l * speed_scale
                     pwm_r = lane_r * speed_scale
                 else:
+                    # Trigger bias — leader lost with strong lateral excursion
+                    if _bias_target == 0.0 and abs(_last_lat) > bias_excursion_thr:
+                        _bias_target = bias_amount * (1.0 if _last_lat > 0 else -1.0)
+                        _bias_start = now
+                        print(f'[agent] turn bias target {_bias_target:+.2f} (last_lat={_last_lat:+.2f})')
+
+                    # Compute ramped bias value
+                    _bias = 0.0
+                    if _bias_target != 0.0:
+                        elapsed = now - _bias_start
+                        if elapsed >= bias_duration_s:
+                            _bias_target = 0.0
+                            _last_lat = 0.0
+                        else:
+                            ramp = min(1.0, elapsed / bias_ramp_s)
+                            _bias = _bias_target * ramp
+
                     speed_scale = 1.0
                     pwm_l = lane_l
                     pwm_r = lane_r
+                    if _bias != 0.0:
+                        pwm_l = max(0.0, pwm_l + _bias)
+                        pwm_r = max(0.0, pwm_r - _bias)
                     if lost_since is None:
                         lost_since = now
                     if now - lost_since > lane_follow_timeout_s:
@@ -350,6 +372,7 @@ def main(camera, wheels, leds, stop_event):
                 'lateral_error': lateral_error, 'state': state,
                 'speed_scale': speed_scale,
                 'lane_detected': lane_detected,
+                'turn_bias': round(_bias, 3),
             }
             with _det_lock:
                 DETECTION.update(det)
@@ -359,6 +382,7 @@ def main(camera, wheels, leds, stop_event):
                 'speed_scale': round(speed_scale, 3),
                 'detection_method': method, 'quality': round(quality, 2),
                 'lane_detected': lane_detected,
+                'turn_bias': round(_bias, 3),
             }
 
             stop_event.wait(dt)

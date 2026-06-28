@@ -1,28 +1,3 @@
-"""
-Convoy leader — lane follow + red line stop + scripted turns.
-
-FSM: CRUISE → APPROACH → STOP → (PRE_TURN → TURN → EXIT | CRUISE) → CRUISE
-
-  CRUISE   — lane-follow; check for red line in approach zone (taller ROI)
-  APPROACH — red line detected in approach zone; ramp speed down exponentially
-  STOP     — hold at 0 for stop_hold_s; pick turn from the scripted sequence
-             ('R'=right, 'L'=left, 'S'=straight/stop-only); start LED blink
-  PRE_TURN — straight creep to position bot at intersection center (skip for 'S')
-  TURN     — open-loop timed arc (finetuned PWM + duration) (skip for 'S')
-  EXIT     — brief straight creep; set red-line ignore cooldown (skip for 'S')
-  CRUISE   — resume lane following
-
-After the turn sequence is exhausted, all subsequent red lines are stop-only
-(straight). Turn cooldown prevents re-triggering on the same line.
-
-LED turn signals: back LEDs blink amber during STOP/PRE_TURN/TURN to signal
-the turn direction to the follower (right → LED 4 blinks, left → LED 3 blinks).
-
-Uses the DETECTION dict + lock pattern (same as the follower) so the video
-thread draws the overlay on the live frame (never freezes). PAUSED stops only
-the wheels.
-"""
-
 import os
 import time
 import threading
@@ -202,16 +177,13 @@ def main(camera, wheels, leds, stop_event):
             lane_l, lane_r = _lane.compute_commands(rgb)
             lane_info = _lane.last_debug_info
 
-            # --- red line detection (skip during ignore cooldown) ---
             red_detected, red_ratio, red_approach = False, 0.0, False
             if now > red_ignore_until:
                 red_detected, red_ratio, red_approach = detect_red_line(frame, red_cfg)
 
-            # --- FSM ---
             pwm_l, pwm_r = lane_l, lane_r
 
             if state == 'CRUISE':
-                # APPROACH triggers on the taller approach zone (fires earlier)
                 if red_approach:
                     state = 'APPROACH'
                     state_start = now
@@ -221,12 +193,10 @@ def main(camera, wheels, leds, stop_event):
                 slow_factor *= turn_cfg['approach_slow_factor']
                 pwm_l = lane_l * slow_factor
                 pwm_r = lane_r * slow_factor
-                # transition to STOP when the close zone fires OR we've slowed enough
                 if red_detected or slow_factor < 0.06:
                     state = 'STOP'
                     state_start = now
                     turn_count += 1
-                    # pick turn from sequence (exhausted → all 'S')
                     if turn_count <= len(turn_sequence):
                         turn_dir = turn_sequence[turn_count - 1]
                     else:
@@ -236,7 +206,6 @@ def main(camera, wheels, leds, stop_event):
                 pwm_l = pwm_r = 0.0
                 if elapsed >= turn_cfg['stop_hold_s']:
                     if turn_dir == 'S':
-                        # straight stop — go straight back to CRUISE
                         state = 'CRUISE'
                         state_start = now
                         red_ignore_until = now + max(
@@ -275,21 +244,17 @@ def main(camera, wheels, leds, stop_event):
                     red_ignore_until = now + max(
                         turn_cfg['red_ignore_s'], turn_cooldown_s)
                     turn_dir = 'none'
-
-            # --- LED blink during turn states ---
+                    
             blink_on = (state in ('STOP', 'PRE_TURN', 'TURN')
                         and (now % blink_period) < (blink_period * 0.5))
 
-            # --- wheels (paused = movement only) ---
             if PAUSED:
                 wheels.set_wheels_speed(0.0, 0.0)
             else:
                 wheels.set_wheels_speed(float(pwm_l), float(pwm_r))
 
-            # --- LEDs ---
             _set_leds(leds, state, turn_dir, blink_on)
 
-            # --- publish results ---
             det = {
                 'state': state,
                 'red_ratio': red_ratio,

@@ -14,6 +14,13 @@ detection:
   clahe: true
   hold_frames: 3
   roi_pad: 30
+
+turn_bias:
+  bias_amount: 0.15
+  bias_duration_s: 1.0
+  bias_ramp_s: 0.3
+  bias_excursion_thr: 0.3
+
 lane_fallback:
   enabled: true
   lane_follow_timeout_s: 5.0
@@ -24,4 +31,4 @@ leader:
   grid_rows: 3
   span_deadband: 0.03
   stop_span: 0.3
-  target_span: 0.25
+  target_span: 0.27
