@@ -61,14 +61,15 @@ _DEFAULTS = {
         'clahe': True,
     },
     'turn': {
-        # LED blink detector parameters
-        'blink_hz': 5.0,                 # leader's expected blink cadence
-        'blink_sustain_frames': 4,      # consecutive amber frames to confirm
-        'blink_blink_frames': 3,        # how many of those must be "on"
-        'min_amber_frac': 0.002,        # min amber pixel fraction to be "lit"
+        # LED blink detector parameters — tuned for a 2 Hz leader cadence
+        # (500 ms period → 12 frames/cycle at 24 fps, robust to occasional
+        # missed frames). The window holds ~3 cycles and requires 2 rising
+        # edges to confirm — fires within ~1 s once the leader starts blinking.
+        'blink_hz': 2.0,                 # leader's expected blink cadence
+        'min_amber_frac': 0.0005,       # min amber pixel fraction to be "lit"
         'side_ratio': 1.8,              # left/right amber-count ratio to pick a side
-        'blink_window_s': 0.6,                # sliding window for blink edge counting
-        'blink_required_edges': 3,            # edges in window to confirm a turn
+        'blink_window_s': 1.5,          # sliding window for blink edge counting
+        'blink_required_edges': 2,     # edges in window to confirm a turn
         # Open-loop arc params (same finetuned values as the leader)
         'preturn_right_s': 0.83,
         'preturn_left_s': 0.33,
@@ -572,6 +573,7 @@ def main(camera, wheels, leds, stop_event):
 
             elif state == 'TURNING':
                 # blind open-loop arc — lane steering intentionally discarded
+                # (filters kept clean) until the exit phase re-acquires the new road.
                 if turn_phase == 'preturn':
                     ps = float(t.get('preturn_speed', 0.20))
                     pwm_l = pwm_r = ps
@@ -591,19 +593,54 @@ def main(camera, wheels, leds, stop_event):
                     if now - turn_state_start >= turn_s:
                         turn_phase = 'exit'
                         turn_state_start = now
+                        # Reset lane agent filters now so the exit phase's
+                        # re-acquisition runs on clean state.
+                        _reset_lane_agent_filters()
 
                 elif turn_phase == 'exit':
                     es = float(t.get('exit_speed', 0.40))
-                    pwm_l = pwm_r = es
-                    if now - turn_state_start >= float(t.get('exit_s', 0.125)):
-                        state = 'LANE_FOLLOW'
-                        _blink.reset()
-                        _ctrl.reset()
-                        lost_since = None
-                        turn_cooldown_until = now + turn_cooldown_s
-                        # Drop lane agent's stale filter state so the first
-                        # post-turn frame isn't steered by old commands.
-                        _reset_lane_agent_filters()
+                    # Probe the new road's lane lines: run lane servoing during
+                    # exit so we can hand off smoothly when lines appear.
+                    try:
+                        rgb_exit = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        exit_lane_l, exit_lane_r = _lane_agent.compute_commands(rgb_exit)
+                        exit_info = _lane_agent.last_debug_info
+                        exit_lane_detected = bool(exit_info.get('lane_detected', False))
+                    except Exception:
+                        exit_lane_l = exit_lane_r = 0.0
+                        exit_lane_detected = False
+
+                    elapsed = now - turn_state_start
+                    exit_total = float(t.get('exit_s', 0.125))
+                    min_lock_s = 0.05      # require a brief lock before handoff
+                    ramp_s = 0.2           # smooth ramp arc-PWM -> lane-PWM
+
+                    if exit_lane_detected and elapsed >= min_lock_s:
+                        # Smoothly blend the blind exit PWM into the lane
+                        # commands so the follower eases into the new road
+                        # instead of snapping from arc to lane steering.
+                        alpha = float(np.clip(elapsed / ramp_s, 0.0, 1.0))
+                        pwm_l = (1.0 - alpha) * es + alpha * exit_lane_l
+                        pwm_r = (1.0 - alpha) * es + alpha * exit_lane_r
+                        lane_detected = True
+                        if alpha >= 1.0:
+                            # Fully handed off — resume normal lane following.
+                            state = 'LANE_FOLLOW'
+                            _blink.reset()
+                            _ctrl.reset()
+                            lost_since = None
+                            turn_cooldown_until = now + turn_cooldown_s
+                    else:
+                        # Lane not yet visible — keep the blind exit speed.
+                        pwm_l = pwm_r = es
+                        # Fallback: if exit_s expires with no re-acquisition,
+                        # force back to LANE_FOLLOW (lane agent will recover).
+                        if elapsed >= exit_total:
+                            state = 'LANE_FOLLOW'
+                            _blink.reset()
+                            _ctrl.reset()
+                            lost_since = None
+                            turn_cooldown_until = now + turn_cooldown_s
 
                 tdir = turn_arc_dir
                 tactive = True

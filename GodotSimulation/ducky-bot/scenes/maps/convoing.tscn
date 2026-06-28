@@ -60,7 +60,7 @@ size = Vector2(28.8, 28.8)
 [node name="Tiles" type="Node3D" parent="." unique_id=614745467]
 
 [node name="Tile_2_10" parent="Tiles" unique_id=333112801 instance=ExtResource("1_d6k4v")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.5, 0.091, 6.3)
+transform = Transform3D(0.9999946, 0.003204228, -0.0007359109, -0.0032017026, 0.9999891, 0.0034015763, 0.0007468217, -0.0033991977, 0.9999939, 1.5, 0.091, 6.3)
 
 [node name="Mesh2" parent="Tiles/Tile_2_10" unique_id=2042367189 instance=ExtResource("2_w11sa")]
 
@@ -458,6 +458,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.632, 0.091, 6.3)
 script = ExtResource("15_1456s")
 
 [node name="DuckieBot_NPC" parent="NPCPath/PathFollower" unique_id=1441390629 instance=ExtResource("16_01hcx")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.3113022e-05, 0.00021640956, -6.914139e-05)
 
 [node name="VehicleCorected2" parent="NPCPath/PathFollower/DuckieBot_NPC" unique_id=1573770069 instance=ExtResource("17_mce2d")]
 transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 0, 0, 0)
@@ -467,7 +468,7 @@ transform = Transform3D(0.9999896, 0, -4.301903e-09, 0, 1, 0, 4.301903e-09, 0, 0
 shape = SubResource("BoxShape3D_bir6l")
 
 [node name="DotPlate" type="MeshInstance3D" parent="NPCPath/PathFollower/DuckieBot_NPC" unique_id=995742087]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.00063192844, 0.044707797, 0.10541725)
+transform = Transform3D(0.8, 0, 0, 0, 0.8, 0, 0, 0, 0.8, 0.00063192844, 0.059125625, 0.10541725)
 material_override = SubResource("StandardMaterial3D_spf2e")
 mesh = SubResource("QuadMesh_5nntr")
 script = ExtResource("20_dotpl")

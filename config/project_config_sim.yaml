@@ -26,17 +26,13 @@ detection:
   clahe: true
 
 turn:
-  excursion_thr: 0.35
-  excursion_thr_strong: 0.55
-  tilt_thr: 0.10
-  tilt_thr_strong: 0.18
-  sustain_frames: 4
-  clear_thr: 0.12
-  clear_tilt: 0.04
-  baseline_alpha: 0.02
-  self_stable_thr: 0.10
-  self_stable_alpha: 0.15
-  sign_invert: false
+  # LED blink detector (leader blinks amber back LEDs at 2 Hz during STOP).
+  blink_hz: 2.0
+  blink_window_s: 1.5
+  blink_required_edges: 2
+  min_amber_frac: 0.0005
+  side_ratio: 1.8
+  # Sim-tuned arc params (conservative PWM — no deadzone in Godot).
   preturn_right_s: 0.83
   preturn_left_s: 0.33
   preturn_speed: 0.25

@@ -390,11 +390,20 @@ _HTML = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Convoying �
  .sv{{width:52px;padding:3px 4px;background:#0d1117;border:1px solid var(--border);
       border-radius:4px;color:var(--text);font-size:11px;text-align:center;font-family:monospace}}
  .sv:focus{{outline:none;border-color:var(--accent)}}
+  #turnBanner{{display:none;padding:8px 14px;font-weight:700;font-size:14px;
+              text-align:center;color:#0d1117;letter-spacing:.5px}}
+  #turnBanner.left{{background:#00d6e6}}
+  #turnBanner.right{{background:#ff5cc8}}
+  #turnBanner .ledDot{{display:inline-block;width:9px;height:9px;border-radius:50%;
+                       background:#3a3a3a;margin:0 6px 0 10px;vertical-align:middle}}
+  #turnBanner .ledDot.lit{{background:#ffae00;box-shadow:0 0 6px #ffae00}}
+  #turnBanner .edges{{font-family:monospace;font-weight:400;opacity:.85;margin-left:8px}}
 </style></head><body>
 <div class="header">
   <h1>Convoying — Simulation</h1>
   <span class="sub">Leader Following · PID Tuning</span>
 </div>
+<div id="turnBanner"></div>
 <div class="main">
   <div class="video-wrap">
     <img id="feed" src="/video">
